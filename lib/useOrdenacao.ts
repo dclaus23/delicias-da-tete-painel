@@ -7,7 +7,7 @@ export type Direcao = 'asc' | 'desc';
 // Ordenação genérica de tabela por coluna — clicar alterna asc/desc; trocar
 // de coluna reinicia em asc. Usado por ListaClientes, TabelaGastos,
 // TabelaDetalhamento e TabelaPendencias.
-export function useOrdenacao<T extends Record<string, unknown>>(
+export function useOrdenacao<T extends object>(
   linhas: T[],
   colunaInicial: keyof T | null = null,
   direcaoInicial: Direcao = 'asc'
