@@ -1,22 +1,21 @@
 'use client';
 
 import { useRouter, usePathname, useSearchParams } from 'next/navigation';
-import PillFiltro from './PillFiltro';
 import SeletorDropdown from './SeletorDropdown';
 
-const MESES = [
-  { valor: '01', rotulo: 'Janeiro' },
-  { valor: '02', rotulo: 'Fevereiro' },
-  { valor: '03', rotulo: 'Março' },
-  { valor: '04', rotulo: 'Abril' },
-  { valor: '05', rotulo: 'Maio' },
-  { valor: '06', rotulo: 'Junho' },
-  { valor: '07', rotulo: 'Julho' },
-  { valor: '08', rotulo: 'Agosto' },
-  { valor: '09', rotulo: 'Setembro' },
-  { valor: '10', rotulo: 'Outubro' },
-  { valor: '11', rotulo: 'Novembro' },
-  { valor: '12', rotulo: 'Dezembro' },
+const NOMES_MES = [
+  'Janeiro',
+  'Fevereiro',
+  'Março',
+  'Abril',
+  'Maio',
+  'Junho',
+  'Julho',
+  'Agosto',
+  'Setembro',
+  'Outubro',
+  'Novembro',
+  'Dezembro',
 ];
 
 const OPCOES_CONTEXTO = [
@@ -25,11 +24,15 @@ const OPCOES_CONTEXTO = [
   { valor: 'AVULSOS', rotulo: 'Só Avulsos' },
 ];
 
-// Filtro de Mês e Ano (dois seletores independentes, combinados por baixo
-// dos panos em ?mes=YYYY-MM) + contexto (Escola/Avulsos), lidos e gravados
-// na URL — assim a seleção é compartilhada entre as páginas do painel ao
-// navegar de uma pra outra. `mostrarContexto=false` esconde o pill de
-// contexto pra páginas que já são só de um tipo (ex: Pedidos avulsos).
+// Filtro de Período (mês + ano combinados numa única caixa, ex.: "Agosto
+// 2026" — em vez de dois seletores separados) e contexto (Escola/Avulsos),
+// lidos e gravados na URL — assim a seleção é compartilhada entre as
+// páginas do painel ao navegar de uma pra outra. Layout revisado no Lote 25
+// (2026-09-08) pra ficar com uma caixa só por filtro, no mesmo estilo do
+// OsClauss-Financeiro, em vez de dois dropdowns (Mês/Ano) + três botões
+// (Escola+Avulsos/Só Escola/Só Avulsos) espalhados.
+// `mostrarContexto=false` esconde a caixa de contexto pra páginas que já
+// são só de um tipo (ex: Pedidos avulsos).
 export default function BarraFiltros({
   meses,
   mostrarContexto = true,
@@ -43,12 +46,18 @@ export default function BarraFiltros({
 
   const mesDefault = meses[meses.length - 1]?.valor ?? '';
   const mesAtual = searchParams.get('mes') ?? mesDefault;
-  const [anoAtual, mesNumAtual] = mesAtual ? mesAtual.split('-') : ['', ''];
   const contextoAtual = searchParams.get('contexto') ?? 'TODOS';
 
-  const anosDisponiveis = Array.from(new Set(meses.map((m) => m.valor.slice(0, 4))))
-    .sort()
-    .map((ano) => ({ valor: ano, rotulo: ano }));
+  // "Agosto 2026" em vez de "ago 26" (formato usado nos gráficos) — mais
+  // legível como opção de dropdown. Mais recente primeiro: é o que
+  // normalmente se procura.
+  const opcoesPeriodo = [...meses]
+    .map((m) => {
+      const [ano, mesNum] = m.valor.split('-');
+      const nomeCompleto = NOMES_MES[Number(mesNum) - 1] ?? m.rotulo;
+      return { valor: m.valor, rotulo: `${nomeCompleto} ${ano}` };
+    })
+    .reverse();
 
   function atualizar(chave: string, valor: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -56,24 +65,19 @@ export default function BarraFiltros({
     router.push(`${pathname}?${params.toString()}`, { scroll: false });
   }
 
-  function atualizarMesNum(mesNum: string) {
-    atualizar('mes', `${anoAtual}-${mesNum}`);
-  }
-
-  function atualizarAno(ano: string) {
-    atualizar('mes', `${ano}-${mesNumAtual}`);
-  }
-
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <SeletorDropdown rotulo="Mês" valor={mesNumAtual} opcoes={MESES} onChange={atualizarMesNum} />
-        <SeletorDropdown rotulo="Ano" valor={anoAtual} opcoes={anosDisponiveis} onChange={atualizarAno} />
-      </div>
+      <SeletorDropdown
+        rotulo="Período"
+        valor={mesAtual}
+        opcoes={opcoesPeriodo}
+        onChange={(v) => atualizar('mes', v)}
+      />
       {mostrarContexto && (
-        <PillFiltro
-          opcoes={OPCOES_CONTEXTO}
+        <SeletorDropdown
+          rotulo="Contexto"
           valor={contextoAtual}
+          opcoes={OPCOES_CONTEXTO}
           onChange={(v) => atualizar('contexto', v)}
         />
       )}
