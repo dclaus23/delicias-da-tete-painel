@@ -96,52 +96,38 @@ export async function buscarDiasTrabalhados(mes, contexto) {
   return datas.size;
 }
 
-// Detalhamento do período — só é chamada com um mês específico selecionado
-// (em "Todos os períodos" seria o histórico inteiro de uma vez, o que deixava
-// a Visão geral lenta — Lote 28).
-export async function buscarDetalhamento(mes, contexto) {
+// Detalhamento do período — SÓ Escola (Lote 30, 2026-09-08): esta tabela
+// alimenta o Excel que a Tereza manda pro tesoureiro da escola conferir e
+// pagar (mesmo fluxo do Lote 10 do painel Next.js antigo), então ignora de
+// propósito o filtro "Contexto" da Visão geral — mesmo com "Escola +
+// Avulsos" ou "Só Avulsos" selecionado ali em cima, esta tabela nunca traz
+// pedido avulso, pra não arriscar um pedido de cliente avulso ir parar num
+// documento pensado pra escola.
+//
+// Só é chamada com um mês específico selecionado (em "Todos os períodos"
+// seria o histórico inteiro de uma vez, o que deixava a Visão geral lenta —
+// Lote 28).
+export async function buscarDetalhamentoEscola(mes) {
   const prefixo = mes ? anoMesCompacto(mes) : null;
   const linhas = [];
 
-  if (contexto !== 'AVULSOS') {
-    const dataEscola = await buscarTodasPaginado((inicio, fim) => {
-      let q = sb.from('pedidos_escola')
-        .select('data, tipo_lancamento, qtd_marmitas, qtd_lanches, valor_total, obs, arquivo_origem', { count: 'exact' })
-        .order('id', { ascending: true });
-      if (prefixo) q = q.ilike('arquivo_origem', `${prefixo}_%`);
-      return q.range(inicio, fim);
+  const dataEscola = await buscarTodasPaginado((inicio, fim) => {
+    let q = sb.from('pedidos_escola')
+      .select('data, tipo_lancamento, qtd_marmitas, qtd_lanches, valor_total, obs, arquivo_origem', { count: 'exact' })
+      .order('id', { ascending: true });
+    if (prefixo) q = q.ilike('arquivo_origem', `${prefixo}_%`);
+    return q.range(inicio, fim);
+  });
+  for (const l of dataEscola) {
+    linhas.push({
+      data: l.data,
+      origem: `Escola (${contextoDoArquivo(l.arquivo_origem) ?? '—'})`,
+      quem: l.tipo_lancamento === 'PROFESSORES' ? 'Professores' : 'Alunos',
+      qtdMarmitas: l.qtd_marmitas ?? 0,
+      qtdLanches: l.qtd_lanches ?? 0,
+      valorTotal: num(l.valor_total),
+      obs: l.obs,
     });
-    for (const l of dataEscola) {
-      linhas.push({
-        data: l.data,
-        origem: `Escola (${contextoDoArquivo(l.arquivo_origem) ?? '—'})`,
-        quem: l.tipo_lancamento === 'PROFESSORES' ? 'Professores' : 'Alunos',
-        qtdMarmitas: l.qtd_marmitas ?? 0,
-        qtdLanches: l.qtd_lanches ?? 0,
-        valorTotal: num(l.valor_total),
-        obs: l.obs,
-      });
-    }
-  }
-  if (contexto !== 'ESCOLA') {
-    const dataAvulsos = await buscarTodasPaginado((inicio, fim) => {
-      let q = sb.from('pedidos_avulsos')
-        .select('data, cliente_nome_bruto, descricao_pedido, qtd_marmitas, qtd_lanches, valor_total, obs, arquivo_origem', { count: 'exact' })
-        .order('id', { ascending: true });
-      if (prefixo) q = q.ilike('arquivo_origem', `${prefixo}_%`);
-      return q.range(inicio, fim);
-    });
-    for (const l of dataAvulsos) {
-      linhas.push({
-        data: l.data,
-        origem: `Avulso (${contextoDoArquivo(l.arquivo_origem) ?? '—'})`,
-        quem: l.cliente_nome_bruto || '—',
-        qtdMarmitas: l.qtd_marmitas ?? 0,
-        qtdLanches: l.qtd_lanches ?? 0,
-        valorTotal: num(l.valor_total),
-        obs: l.obs,
-      });
-    }
   }
   return linhas.sort((a, b) => (b.data ?? '').localeCompare(a.data ?? ''));
 }

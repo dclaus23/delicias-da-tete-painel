@@ -1,5 +1,5 @@
 import {
-  buscarResultadosMensais, buscarDiasTrabalhados, buscarDetalhamento,
+  buscarResultadosMensais, buscarDiasTrabalhados, buscarDetalhamentoEscola,
   buscarGastosDetalhado, buscarUltimaSincronizacao,
 } from './dados.js';
 import {
@@ -162,7 +162,10 @@ async function render() {
   <div class="sec">
     <div class="sec-title">Detalhamento do período</div>
     <div class="tcard">
-      <div class="tbar"><h3>Pedidos</h3></div>
+      <div class="tbar">
+        <h3>Pedidos <span style="font-size:10px;font-weight:500;color:var(--t3)">(Escola)</span></h3>
+        <button class="btn-export" id="btnExportarDet" type="button">⬇ Baixar Excel</button>
+      </div>
       <div class="tw"><table><thead id="thDet"></thead><tbody id="tbDet"></tbody></table></div>
     </div>
   </div>
@@ -179,7 +182,7 @@ async function render() {
 
   if (!todosOsPeriodos) {
     const [det, gas] = await Promise.all([
-      buscarDetalhamento(_mesSelecionado, _contexto),
+      buscarDetalhamentoEscola(_mesSelecionado),
       buscarGastosDetalhado(_mesSelecionado, _contexto),
     ]);
     _detalhamentoAtual = det;
@@ -208,6 +211,14 @@ function renderGraficos(todosOsPeriodos) {
 const LABELS_DET = { data: 'Data', origem: 'Origem', quem: 'Quem', qtdMarmitas: 'Marmitas', qtdLanches: 'Lanches', valorTotal: 'Valor', obs: 'Obs.' };
 const COLS_DET = ['data', 'origem', 'quem', 'qtdMarmitas', 'qtdLanches', 'valorTotal', 'obs'];
 
+function totaisDetalhamento() {
+  return {
+    marmitas: _detalhamentoAtual.reduce((s, r) => s + num(r.qtdMarmitas), 0),
+    lanches: _detalhamentoAtual.reduce((s, r) => s + num(r.qtdLanches), 0),
+    valor: _detalhamentoAtual.reduce((s, r) => s + num(r.valorTotal), 0),
+  };
+}
+
 function renderTabelaDetalhamento() {
   let rows = _detalhamentoAtual.slice();
   if (_sortCol) {
@@ -227,6 +238,54 @@ function renderTabelaDetalhamento() {
       renderTabelaDetalhamento();
     },
   });
+
+  // Linha de Totais (Lote 30) — igual ao "Totais" do Qlik Sense da Tereza:
+  // primeira linha da tabela, soma de Marmitas/Lanches/Valor de TODO o
+  // período (não só das linhas visíveis após ordenar — o total não muda
+  // quando você só reordena a tabela).
+  const tbody = document.getElementById('tbDet');
+  if (tbody && _detalhamentoAtual.length) {
+    const t = totaisDetalhamento();
+    const totalRow = document.createElement('tr');
+    totalRow.className = 'row-total';
+    totalRow.innerHTML =
+      `<td class="bold">Totais</td><td></td><td></td>` +
+      `<td class="tc bold">${t.marmitas}</td><td class="tc bold">${t.lanches}</td>` +
+      `<td class="tr bold">${fmt(t.valor)}</td><td></td>`;
+    tbody.insertBefore(totalRow, tbody.firstChild);
+  }
+
+  document.getElementById('btnExportarDet')?.addEventListener('click', exportarDetalhamentoExcel);
+}
+
+// Excel do Detalhamento (Lote 30) — pra Tereza mandar pro tesoureiro da
+// escola conferir e pagar (mesmo fluxo que já existia no painel Next.js
+// antigo, Lote 10). Só entram pedidos de ESCOLA (buscarDetalhamentoEscola já
+// garante isso) e a linha de Totais vai junto, igual à tabela na tela.
+function exportarDetalhamentoExcel() {
+  if (typeof XLSX === 'undefined') {
+    alert('Não consegui carregar a biblioteca de Excel — verifique sua internet e tente de novo.');
+    return;
+  }
+  const cabecalho = ['Data', 'Origem', 'Quem', 'Marmitas', 'Lanches', 'Valor', 'Obs.'];
+  const t = totaisDetalhamento();
+  const linhaTotais = ['Totais', '', '', t.marmitas, t.lanches, t.valor, ''];
+  const linhas = _detalhamentoAtual.map((r) => [r.data, r.origem, r.quem, r.qtdMarmitas, r.qtdLanches, r.valorTotal, r.obs || '']);
+
+  const ws = XLSX.utils.aoa_to_sheet([cabecalho, linhaTotais, ...linhas]);
+  ws['!cols'] = [{ wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 13 }, { wch: 32 }];
+
+  // Formata a coluna Valor (índice 5) como moeda BRL nas linhas de dado.
+  const ref = XLSX.utils.decode_range(ws['!ref']);
+  for (let linha = 1; linha <= ref.e.r; linha++) {
+    const cel = ws[XLSX.utils.encode_cell({ r: linha, c: 5 })];
+    if (cel && typeof cel.v === 'number') cel.z = '"R$" #,##0.00';
+  }
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Detalhamento');
+  const rotuloPeriodo = _mesSelecionado ? nomeMesAno(_mesSelecionado) : 'Todos os periodos';
+  XLSX.writeFile(wb, `Detalhamento Escola - ${rotuloPeriodo}.xlsx`);
 }
 
 const LABELS_GAS = { data: 'Data', pessoaLocal: 'Pessoa/local', tipoPagamento: 'Pagamento', valor: 'Valor' };
