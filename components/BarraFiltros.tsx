@@ -36,15 +36,23 @@ const OPCOES_CONTEXTO = [
 export default function BarraFiltros({
   meses,
   mostrarContexto = true,
+  permitirTodosPeriodos = false,
 }: {
   meses: { valor: string; rotulo: string }[];
   mostrarContexto?: boolean;
+  // Habilita a opção "Todos os períodos" no topo do dropdown de Período —
+  // usado só na Visão geral (Lote 26, 2026-09-08), pra abrir o painel já
+  // mostrando o agregado de tudo que foi sincronizado (igual ao Qlik Sense
+  // sem filtro nenhum aplicado), passando a detalhar um período específico
+  // só quando o usuário escolhe um no dropdown. Avulsos e Cobrança
+  // continuam sempre partindo do mês mais recente, sem essa opção.
+  permitirTodosPeriodos?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  const mesDefault = meses[meses.length - 1]?.valor ?? '';
+  const mesDefault = permitirTodosPeriodos ? '' : meses[meses.length - 1]?.valor ?? '';
   const mesAtual = searchParams.get('mes') ?? mesDefault;
   const contextoAtual = searchParams.get('contexto') ?? 'TODOS';
 
@@ -58,6 +66,9 @@ export default function BarraFiltros({
       return { valor: m.valor, rotulo: `${nomeCompleto} ${ano}` };
     })
     .reverse();
+  if (permitirTodosPeriodos) {
+    opcoesPeriodo.unshift({ valor: '', rotulo: 'Todos os períodos' });
+  }
 
   function atualizar(chave: string, valor: string) {
     const params = new URLSearchParams(searchParams.toString());

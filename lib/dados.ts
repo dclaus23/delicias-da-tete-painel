@@ -339,30 +339,35 @@ export async function buscarPendencias(mes: string): Promise<Pendencia[]> {
   return [...listaPendentes, ...listaSemPedido].sort((a, b) => b.diasEmAberto - a.diasEmAberto);
 }
 
-// Detalhamento do mês pra Visão geral — junta pedidos_escola e
+// Detalhamento do período pra Visão geral — junta pedidos_escola e
 // pedidos_avulsos num formato comum, respeitando o filtro de contexto
 // (Escola + Avulsos / Só Escola / Só Avulsos).
 //
-// Tanto o período (quais linhas entram) quanto a origem exibida em cada
-// linha vêm do NOME DO ARQUIVO (arquivo_origem), não da coluna `data` nem
-// do join com `contextos` — é o arquivo que diz "isso é de agosto/2026,
-// contexto CAJ", mesmo que alguma linha tenha uma data de outro mês.
+// A origem exibida em cada linha vem do NOME DO ARQUIVO (arquivo_origem),
+// não da coluna `data` nem do join com `contextos` — é o arquivo que diz
+// "isso é de agosto/2026, contexto CAJ", mesmo que alguma linha tenha uma
+// data de outro mês.
+//
+// `mes === ''` significa "Todos os períodos" (Visão geral, Lote 26,
+// 2026-09-08): busca sem filtro de arquivo_origem, e o "Ano/Mês" de cada
+// linha (`anoMes`) passa a ser calculado LINHA A LINHA a partir do próprio
+// arquivo de origem — antes disso, com um mês sempre selecionado, um único
+// `anoMesLabel` valia pra todo o resultado.
 export async function buscarDetalhamento(
   mes: string,
   contexto: FiltroContexto
 ): Promise<DetalheLancamento[]> {
-  if (!mes) return [];
-  const prefixoArquivo = anoMesCompacto(mes);
-  const anoMesLabel = anoMesComBarra(mes);
+  const prefixoArquivo = mes ? anoMesCompacto(mes) : null;
   const linhas: DetalheLancamento[] = [];
 
   if (contexto !== 'AVULSOS') {
-    const { data, error } = await supabaseServer
+    let query = supabaseServer
       .from('pedidos_escola')
       .select(
         'data, tipo_lancamento, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, obs, arquivo_origem'
-      )
-      .ilike('arquivo_origem', `${prefixoArquivo}_%`);
+      );
+    if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
+    const { data, error } = await query;
     if (error) throw error;
     for (const l of data ?? []) {
       const qtdMarmitas = l.qtd_marmitas ?? 0;
@@ -370,7 +375,7 @@ export async function buscarDetalhamento(
       const valorUnitMarmita = Number(l.valor_unit_marmita) || 0;
       const valorUnitLanche = Number(l.valor_unit_lanche) || 0;
       linhas.push({
-        anoMes: anoMesLabel,
+        anoMes: anoMesComBarra(mesDoArquivo(l.arquivo_origem) ?? ''),
         data: l.data,
         origem: `Escola (${contextoDoArquivo(l.arquivo_origem) ?? '—'})`,
         quem: null,
@@ -390,12 +395,13 @@ export async function buscarDetalhamento(
   }
 
   if (contexto !== 'ESCOLA') {
-    const { data, error } = await supabaseServer
+    let query = supabaseServer
       .from('pedidos_avulsos')
       .select(
         'data, cliente_nome_bruto, descricao_pedido, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, valor_pago, data_pagamento, obs, arquivo_origem'
-      )
-      .ilike('arquivo_origem', `${prefixoArquivo}_%`);
+      );
+    if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
+    const { data, error } = await query;
     if (error) throw error;
     for (const l of data ?? []) {
       const qtdMarmitas = l.qtd_marmitas ?? 0;
@@ -403,7 +409,7 @@ export async function buscarDetalhamento(
       const valorUnitMarmita = Number(l.valor_unit_marmita) || 0;
       const valorUnitLanche = Number(l.valor_unit_lanche) || 0;
       linhas.push({
-        anoMes: anoMesLabel,
+        anoMes: anoMesComBarra(mesDoArquivo(l.arquivo_origem) ?? ''),
         data: l.data,
         origem: `Avulso (${contextoDoArquivo(l.arquivo_origem) ?? '—'})`,
         quem: l.cliente_nome_bruto,
@@ -425,8 +431,8 @@ export async function buscarDetalhamento(
   return linhas.sort((a, b) => b.data.localeCompare(a.data));
 }
 
-// Gastos do mês (aba "Gastos") — destaque=true quando a linha é pagamento a
-// uma das colaboradoras.
+// Gastos do período (aba "Gastos") — destaque=true quando a linha é
+// pagamento a uma das colaboradoras.
 //
 // Respeita o filtro Escola/Avulsos/Todos igual ao resto da página: o
 // contexto de cada gasto vem do NOME DO ARQUIVO onde foi lançado (mesmo
@@ -434,18 +440,18 @@ export async function buscarDetalhamento(
 // correspondente — sem rateio percentual. "Só Escola" mostra só os gastos
 // de arquivos de contexto escola (CAJ/BARRA); "Só Avulsos", só os de
 // contexto avulso (EXTRA/CASA/SAQUE/CENE); "Todos" mostra tudo.
+//
+// `mes === ''` = "Todos os períodos" (Visão geral, Lote 26, 2026-09-08):
+// mesma lógica de buscarDetalhamento, sem filtro de arquivo_origem.
 export async function buscarGastosDetalhado(mes: string, contexto: FiltroContexto): Promise<GastoDetalhado[]> {
-  if (!mes) return [];
   // Mesmo critério de período do resto da Visão geral: pelo nome do
   // arquivo, não pela coluna `data` (ver buscarResultadosMensais).
-  const prefixoArquivo = anoMesCompacto(mes);
-  const [{ data, error }, mapaContextoEscola] = await Promise.all([
-    supabaseServer
-      .from('gastos')
-      .select('data, pessoa_local, tipo_pagamento, valor, arquivo_origem')
-      .ilike('arquivo_origem', `${prefixoArquivo}_%`),
-    buscarMapaContextoEscolaPorNome(),
-  ]);
+  let queryGastos = supabaseServer
+    .from('gastos')
+    .select('data, pessoa_local, tipo_pagamento, valor, arquivo_origem');
+  if (mes) queryGastos = queryGastos.ilike('arquivo_origem', `${anoMesCompacto(mes)}_%`);
+
+  const [{ data, error }, mapaContextoEscola] = await Promise.all([queryGastos, buscarMapaContextoEscolaPorNome()]);
   if (error) throw error;
 
   const nomesColaboradoras = NOMES_COLABORADORES.map((n) => n.trim().toLowerCase());

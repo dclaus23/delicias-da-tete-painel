@@ -2,7 +2,7 @@
 
 import { Suspense, useMemo } from 'react';
 import type { ResultadoMensal, FiltroContexto, DetalheLancamento, GastoDetalhado } from '@/lib/types';
-import { faturamentoTotal, variacaoMoM, formatarMoeda, formatarPercentual } from '@/lib/calculos';
+import { faturamentoTotal, variacaoMoM, formatarMoeda, formatarPercentual, nomeMes } from '@/lib/calculos';
 import BarraFiltros from '@/components/BarraFiltros';
 import KpiCard from '@/components/KpiCard';
 import GraficoIndicadorMensal from '@/components/GraficoIndicadorMensal';
@@ -28,9 +28,38 @@ export default function VisaoGeralClient({
   detalhamento: DetalheLancamento[];
   gastos: GastoDetalhado[];
 }) {
+  // mesSelecionado === '' = "Todos os períodos" (Lote 26, 2026-09-08): a
+  // Visão geral abre com o agregado de tudo que já foi sincronizado, igual
+  // ao Qlik Sense sem filtro nenhum aplicado — só passa a mostrar um mês
+  // específico quando o usuário escolhe um no dropdown de Período.
+  const todosOsPeriodos = mesSelecionado === '';
+
+  // Soma de todos os meses sincronizados, no mesmo formato de um
+  // ResultadoMensal — usado como "atual" no modo "Todos os períodos".
+  // Precisa ficar ANTES de qualquer return condicional (ver nota sobre
+  // ordem de hooks logo abaixo, em diasTrabalhados).
+  const totalAgregado = useMemo(
+    () =>
+      resultadosMensais.reduce<ResultadoMensal>(
+        (acc, r) => ({
+          mes: '',
+          faturamentoEscola: acc.faturamentoEscola + r.faturamentoEscola,
+          faturamentoAvulsos: acc.faturamentoAvulsos + r.faturamentoAvulsos,
+          gastos: acc.gastos + r.gastos,
+          gastosEscola: acc.gastosEscola + r.gastosEscola,
+          gastosAvulsos: acc.gastosAvulsos + r.gastosAvulsos,
+        }),
+        { mes: '', faturamentoEscola: 0, faturamentoAvulsos: 0, gastos: 0, gastosEscola: 0, gastosAvulsos: 0 }
+      ),
+    [resultadosMensais]
+  );
+
   const indice = resultadosMensais.findIndex((r) => r.mes === mesSelecionado);
-  const atual = resultadosMensais[indice];
-  const anterior = resultadosMensais[indice - 1];
+  const atual = todosOsPeriodos ? (resultadosMensais.length > 0 ? totalAgregado : undefined) : resultadosMensais[indice];
+  // "Todos os períodos" não tem um "mês anterior" pra comparar — as
+  // variações (MoM) simplesmente não aparecem nesse modo, igual ao Qlik
+  // Sense sem filtro.
+  const anterior = todosOsPeriodos ? undefined : resultadosMensais[indice - 1];
   const anoSelecionado = mesSelecionado.slice(0, 4);
 
   const faturamentoExibido = useMemo(() => {
@@ -131,7 +160,7 @@ export default function VisaoGeralClient({
     return (
       <div className="flex flex-col gap-6">
         <Suspense fallback={null}>
-          <BarraFiltros meses={meses} />
+          <BarraFiltros meses={meses} permitirTodosPeriodos />
         </Suspense>
         <div className="rounded-lg border border-cafe/8 bg-white p-6 text-center text-sm text-tinta/55 shadow-cartao">
           Ainda não há dados sincronizados. Confira se o vigia já rodou pelo menos uma vez.
@@ -153,16 +182,22 @@ export default function VisaoGeralClient({
   const varGastos = variacaoMoM(gastosExibido, gastosAnteriorExibido);
   const varLucro = variacaoMoM(lucroExibido, lucroAnteriorExibido);
 
-  // Rótulo do mês selecionado (ex.: "ago de 2026") — usado no nome do
-  // arquivo Excel exportado do Detalhamento.
-  const mesRotulo = meses.find((m) => m.valor === mesSelecionado)?.rotulo ?? mesSelecionado;
+  // Rótulo do período selecionado (ex.: "ago de 2026", ou "Todos os
+  // períodos") — usado no nome do arquivo Excel exportado do Detalhamento.
+  const mesRotulo = todosOsPeriodos
+    ? 'Todos os períodos'
+    : meses.find((m) => m.valor === mesSelecionado)?.rotulo ?? mesSelecionado;
 
   // Rótulo do contexto pros subtítulos dos painéis "Entregas por dia/data".
   const rotuloContexto = contexto === 'ESCOLA' ? 'Escola' : contexto === 'AVULSOS' ? 'Avulsos' : 'Escola + Avulsos';
 
-  // Gráficos mostram só o ano selecionado (eixo Mês/Ano), não a série
-  // histórica inteira — mais fácil de ler os números em cada barra.
-  const resultadosDoAno = resultadosMensais.filter((r) => r.mes.startsWith(anoSelecionado));
+  // Gráficos mostram só o ano selecionado (eixo Mês/Ano) quando um período
+  // específico está escolhido — mais fácil de ler os números em cada
+  // barra. Em "Todos os períodos" mostram a série histórica inteira, igual
+  // ao Qlik Sense sem filtro (Lote 26, 2026-09-08).
+  const resultadosDoAno = todosOsPeriodos
+    ? resultadosMensais
+    : resultadosMensais.filter((r) => r.mes.startsWith(anoSelecionado));
 
   const dadosFaturamento = resultadosDoAno.map((r) => ({
     mes: r.mes,
@@ -178,6 +213,12 @@ export default function VisaoGeralClient({
     return { mes: r.mes, valor: fat - gas };
   });
 
+  // Em "Todos os períodos" o gráfico cruza vários anos, então o rótulo de
+  // cada barra passa a incluir o ano (nomeMes) em vez de só o mês
+  // (nomeMesCurto, o padrão) — do contrário "ago" ficaria ambíguo entre
+  // 2025 e 2026, por exemplo.
+  const formatarRotuloMes = todosOsPeriodos ? nomeMes : undefined;
+
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-4">
@@ -186,7 +227,7 @@ export default function VisaoGeralClient({
           <p className="text-sm text-tinta/55">Faturamento, gastos e lucro consolidados</p>
         </div>
         <Suspense fallback={null}>
-          <BarraFiltros meses={meses} />
+          <BarraFiltros meses={meses} permitirTodosPeriodos />
         </Suspense>
       </header>
 
@@ -221,18 +262,21 @@ export default function VisaoGeralClient({
           dados={dadosFaturamento}
           mesSelecionado={mesSelecionado}
           cor="#E3A63E"
+          formatarRotuloMes={formatarRotuloMes}
         />
         <GraficoIndicadorMensal
           titulo="Gastos"
           dados={dadosGastos}
           mesSelecionado={mesSelecionado}
           cor="#B5651D"
+          formatarRotuloMes={formatarRotuloMes}
         />
         <GraficoIndicadorMensal
           titulo="Lucro"
           dados={dadosLucro}
           mesSelecionado={mesSelecionado}
           cor="#3C8558"
+          formatarRotuloMes={formatarRotuloMes}
         />
       </section>
 

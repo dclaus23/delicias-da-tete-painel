@@ -59,18 +59,23 @@ export default function GraficoIndicadorMensal({
   dados,
   mesSelecionado,
   cor,
+  formatarRotuloMes = nomeMesCurto,
 }: {
   titulo: string;
   dados: { mes: string; valor: number }[];
   mesSelecionado: string;
   cor: string;
+  // "Todos os períodos" (Visão geral, Lote 26) passa nomeMes (com ano) em
+  // vez do padrão nomeMesCurto — o gráfico deixa de mostrar só um ano
+  // nesse modo, então o mês sozinho ficaria ambíguo entre anos diferentes.
+  formatarRotuloMes?: (mes: string) => string;
 }) {
   // Variação calculada por barra (contra o mês anterior dentro da própria
   // série do ano exibido) — não só pro mês selecionado.
   const pontos: Ponto[] = dados.map((d, i) => {
     const anteriorPonto = dados[i - 1];
     const variacao = anteriorPonto ? variacaoMoM(d.valor, anteriorPonto.valor) : null;
-    return { mesLabel: nomeMesCurto(d.mes), mes: d.mes, valor: d.valor, variacao };
+    return { mesLabel: formatarRotuloMes(d.mes), mes: d.mes, valor: d.valor, variacao };
   });
   const variacaoPorLabel = new Map(pontos.map((p) => [p.mesLabel, p.variacao]));
 

@@ -15,7 +15,12 @@ export default async function VisaoGeralPage({
   const resultadosMensais = await buscarResultadosMensais();
   const meses = resultadosMensais.map((r) => ({ valor: r.mes, rotulo: nomeMes(r.mes) }));
 
-  const mesSelecionado = searchParams.mes ?? meses[meses.length - 1]?.valor ?? '';
+  // Sem ?mes= na URL = "Todos os períodos" (Lote 26, 2026-09-08): a Visão
+  // geral abre com o agregado de tudo que já foi sincronizado, igual ao
+  // Qlik Sense sem filtro nenhum aplicado, e só passa a detalhar um mês
+  // específico quando o usuário escolhe um no dropdown de Período. Antes
+  // disso, a ausência de ?mes= caía por padrão no mês mais recente.
+  const mesSelecionado = searchParams.mes ?? '';
   const contexto = (searchParams.contexto as FiltroContexto) ?? 'TODOS';
 
   // "Entregas por dia" e "Entregas por data" (painéis ao lado do
