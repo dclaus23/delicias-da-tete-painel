@@ -1,4 +1,9 @@
-import { buscarResultadosMensais, buscarDetalhamento, buscarGastosDetalhado } from '@/lib/dados';
+import {
+  buscarResultadosMensais,
+  buscarDetalhamento,
+  buscarGastosDetalhado,
+  buscarDiasTrabalhados,
+} from '@/lib/dados';
 import { nomeMes } from '@/lib/calculos';
 import type { FiltroContexto } from '@/lib/types';
 import VisaoGeralClient from './VisaoGeralClient';
@@ -22,15 +27,21 @@ export default async function VisaoGeralPage({
   // disso, a ausência de ?mes= caía por padrão no mês mais recente.
   const mesSelecionado = searchParams.mes ?? '';
   const contexto = (searchParams.contexto as FiltroContexto) ?? 'TODOS';
+  const todosOsPeriodos = mesSelecionado === '';
 
-  // "Entregas por dia" e "Entregas por data" (painéis ao lado do
-  // Detalhamento) deixaram de ter sua própria consulta ao banco no Lote 13
-  // — são calculados no client a partir do próprio `detalhamento` abaixo,
-  // que já respeita mês + contexto, então não tem mais risco de os dois
-  // números divergirem.
-  const [detalhamento, gastos] = await Promise.all([
-    buscarDetalhamento(mesSelecionado, contexto),
-    buscarGastosDetalhado(mesSelecionado, contexto),
+  // Em "Todos os períodos" as tabelas de Detalhamento/Gastos (e os painéis
+  // de entregas por dia/data, que dependem do Detalhamento) deixam de ser
+  // buscadas por padrão — são o histórico INTEIRO de pedidos/gastos, e
+  // carregar + renderizar milhares de linhas de uma vez era a maior causa
+  // da Visão geral demorar pra responder nesse modo (reportado pela
+  // Tereza no Lote 28, 2026-09-08). O KPI "Dias trabalhados" continua
+  // certo mesmo assim: passou a vir de `buscarDiasTrabalhados`, uma busca
+  // bem mais enxuta (só 3 colunas) que não depende do Detalhamento
+  // completo.
+  const [detalhamento, gastos, diasTrabalhados] = await Promise.all([
+    todosOsPeriodos ? Promise.resolve([]) : buscarDetalhamento(mesSelecionado, contexto),
+    todosOsPeriodos ? Promise.resolve([]) : buscarGastosDetalhado(mesSelecionado, contexto),
+    buscarDiasTrabalhados(mesSelecionado, contexto),
   ]);
 
   return (
@@ -41,6 +52,7 @@ export default async function VisaoGeralPage({
       contexto={contexto}
       detalhamento={detalhamento}
       gastos={gastos}
+      diasTrabalhados={diasTrabalhados}
     />
   );
 }

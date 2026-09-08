@@ -20,6 +20,7 @@ export default function VisaoGeralClient({
   contexto,
   detalhamento,
   gastos,
+  diasTrabalhados,
 }: {
   resultadosMensais: ResultadoMensal[];
   meses: { valor: string; rotulo: string }[];
@@ -27,6 +28,7 @@ export default function VisaoGeralClient({
   contexto: FiltroContexto;
   detalhamento: DetalheLancamento[];
   gastos: GastoDetalhado[];
+  diasTrabalhados: number;
 }) {
   // mesSelecionado === '' = "Todos os períodos" (Lote 26, 2026-09-08): a
   // Visão geral abre com o agregado de tudo que já foi sincronizado, igual
@@ -94,26 +96,15 @@ export default function VisaoGeralClient({
     return anterior.gastos;
   }, [anterior, contexto]);
 
-  // Dias trabalhados no período: quantidade de DATAS distintas no
-  // Detalhamento já filtrado (mês + contexto Escola/Avulsos/Todos) em que
-  // houve entrega de fato (marmita ou lanche > 0). Linhas com uma
-  // observação mas nenhuma entrega (ex.: "Não teve entrega por conta da
-  // defesa civil") ficam de fora da contagem — do contrário um dia sem
-  // movimento nenhum contava como "trabalhado", inflando o número em 1 na
-  // comparação com o KPI "Dias" do Qlik Sense da Tereza (achado no Lote 12,
-  // 2026-08-30: ela reportou 29 no nosso painel vs. 28 no Qlik pra Só
-  // Escola em agosto/2026 — a diferença era exatamente esse dia).
-  // IMPORTANTE: precisa ficar ANTES do "if (!atual) return" logo abaixo —
-  // hooks do React (useMemo, useState etc.) nunca podem vir depois de um
-  // return condicional, senão o número de hooks muda entre renders e o
-  // React quebra com "Rendered fewer hooks than expected".
-  const diasTrabalhados = useMemo(
-    () =>
-      new Set(
-        detalhamento.filter((d) => d.qtdMarmitas > 0 || d.qtdLanches > 0).map((d) => d.data)
-      ).size,
-    [detalhamento]
-  );
+  // Dias trabalhados no período: até o Lote 27 era calculado aqui no
+  // client, contando DATAS distintas do `detalhamento` completo com
+  // entrega de fato (marmita ou lanche > 0) — critério que corrigiu o
+  // KPI no Lote 12 (2026-08-30, achado: uma linha sem entrega nenhuma
+  // inflava a contagem em 1 dia vs. o Qlik Sense da Tereza). Desde o
+  // Lote 28 (2026-09-08) vem pronto do servidor via `buscarDiasTrabalhados`
+  // (mesmo critério, só que numa busca bem mais enxuta) — porque em
+  // "Todos os períodos" o Detalhamento completo deixou de ser buscado por
+  // padrão (ver comentário na seção do Detalhamento, mais abaixo).
 
   // "Entregas por dia" (por dia da SEMANA) e "Entregas por data" (dia a
   // dia) — painéis ao lado do Detalhamento. Até o Lote 12 vinham de uma
@@ -289,24 +280,40 @@ export default function VisaoGeralClient({
         />
       </section>
 
-      {/* items-start é essencial aqui: por padrão o grid estica os dois
-         filhos pra mesma altura (align-items: stretch), então o card do
-         Detalhamento ficava tão alto quanto a coluna da direita (os dois
-         painéis empilhados) mesmo quando a própria tabela era bem mais
-         curta — sobrava um espaço em branco enorme dentro do card, embaixo
-         da tabela (reportado pela Tereza no Lote 13, 2026-08-30). Com
-         items-start cada coluna só cresce até a altura do seu próprio
-         conteúdo. */}
-      <section className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <TabelaDetalhamento linhas={detalhamento} mesRotulo={mesRotulo} />
+      {/* Em "Todos os períodos" o Detalhamento/Gastos linha a linha e os
+         painéis de entregas por dia/data não são buscados por padrão (ver
+         app/visao-geral/page.tsx, Lote 28, 2026-09-08) — seriam milhares
+         de linhas de pedido de uma vez só, o que só deixava a página mais
+         lenta sem servir pra muita coisa (ninguém lê um extrato de 2 anos
+         numa tabela só). Os KPIs e gráficos acima continuam batendo com o
+         total agregado normalmente; pra ver os lançamentos, basta
+         selecionar um período específico no filtro. */}
+      {todosOsPeriodos ? (
+        <div className="rounded-lg border border-cafe/8 bg-white p-6 text-center text-sm text-tinta/55 shadow-cartao">
+          Selecione um período específico no filtro acima pra ver o detalhamento e os gastos linha a linha.
         </div>
-        <div className="flex flex-col gap-4 lg:col-span-1">
-          <PainelDiasSemanaCaj dias={diasSemanaResumo} rotuloContexto={rotuloContexto} />
-          <TabelaEntregasPorDataCaj dias={entregasPorData} rotuloContexto={rotuloContexto} />
-        </div>
-      </section>
-      <TabelaGastos gastos={gastos} />
+      ) : (
+        <>
+          {/* items-start é essencial aqui: por padrão o grid estica os dois
+             filhos pra mesma altura (align-items: stretch), então o card do
+             Detalhamento ficava tão alto quanto a coluna da direita (os dois
+             painéis empilhados) mesmo quando a própria tabela era bem mais
+             curta — sobrava um espaço em branco enorme dentro do card, embaixo
+             da tabela (reportado pela Tereza no Lote 13, 2026-08-30). Com
+             items-start cada coluna só cresce até a altura do seu próprio
+             conteúdo. */}
+          <section className="grid grid-cols-1 items-start gap-4 lg:grid-cols-3">
+            <div className="lg:col-span-2">
+              <TabelaDetalhamento linhas={detalhamento} mesRotulo={mesRotulo} />
+            </div>
+            <div className="flex flex-col gap-4 lg:col-span-1">
+              <PainelDiasSemanaCaj dias={diasSemanaResumo} rotuloContexto={rotuloContexto} />
+              <TabelaEntregasPorDataCaj dias={entregasPorData} rotuloContexto={rotuloContexto} />
+            </div>
+          </section>
+          <TabelaGastos gastos={gastos} />
+        </>
+      )}
     </div>
   );
 }

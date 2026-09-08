@@ -23,33 +23,50 @@ const NOMES_COLABORADORES = ['Vanessa', 'Guacira'];
 // erro. pedidos_escola já passou de 1000 linhas em 2026-09, então um
 // select sem filtro de arquivo_origem (como o dos gráficos/KPIs da Visão
 // geral, que somam TODO o histórico) vinha voltando cortado bem nas linhas
-// mais recentes.
+// mais recentes. Foi ISSO que causou o Faturamento errado de Junho/2026
+// reportado pela Tereza (Lote 27, 2026-09-08) — confirmado direto no
+// banco.
 //
-// Foi ISSO — e não as variáveis de ambiente do Vercel nem os gastos
-// duplicados (os dois eram problemas reais, mas de outra causa) — que fez
-// o Faturamento de Junho/2026 aparecer errado pra Tereza (Lote 27,
-// 2026-09-08): confirmado direto no banco, os primeiros 1000 registros
-// (sem ORDER BY, ordem física da tabela) de pedidos_escola somam só R$874
-// de junho, contra os R$10.791 reais — o resto das linhas de junho ficava
-// depois do corte de 1000.
-//
-// Daqui pra frente, toda consulta que pode passar de 1000 linhas usa esse
-// helper: pagina em blocos de 1000 (com ORDER BY estável, senão a
-// paginação pode pular ou repetir linha entre uma página e outra) até
-// esgotar a tabela, em vez de confiar no limite padrão do PostgREST.
+// `construir(inicio, fim)` deve pedir `{ count: 'exact' }` no `.select()`
+// pra esse helper saber o total de linhas já na primeira página (sem isso,
+// ele cai pra buscar página por página até a última vir incompleta — mais
+// lento). Com o total em mãos, todas as páginas seguintes são buscadas
+// em PARALELO (Promise.all), não uma de cada vez — isso corta bastante o
+// tempo de resposta em tabelas grandes (Lote 28, 2026-09-08: a busca
+// sequencial de página em página foi identificada como parte do motivo da
+// Visão geral demorar pra responder em "Todos os períodos").
 async function buscarTodasPaginado(
-  construir: (inicio: number, fim: number) => PromiseLike<{ data: any[] | null; error: any }>
+  construir: (
+    inicio: number,
+    fim: number
+  ) => PromiseLike<{ data: any[] | null; error: any; count?: number | null }>
 ): Promise<any[]> {
   const TAMANHO_PAGINA = 1000;
-  const todas: any[] = [];
-  let inicio = 0;
-  for (;;) {
-    const { data, error } = await construir(inicio, inicio + TAMANHO_PAGINA - 1);
+  const { data: primeira, error: erroPrimeira, count } = await construir(0, TAMANHO_PAGINA - 1);
+  if (erroPrimeira) throw erroPrimeira;
+  const linhasPrimeira = primeira ?? [];
+
+  // Sem `count` (não deveria acontecer, já que todo call-site pede
+  // `{ count: 'exact' }`) ou página não cheia: não tem mais o que buscar.
+  if (!count || linhasPrimeira.length < TAMANHO_PAGINA) {
+    return linhasPrimeira;
+  }
+
+  const totalPaginas = Math.ceil(count / TAMANHO_PAGINA);
+  if (totalPaginas <= 1) return linhasPrimeira;
+
+  const paginasRestantes = await Promise.all(
+    Array.from({ length: totalPaginas - 1 }, (_, i) => {
+      const pagina = i + 1;
+      const inicio = pagina * TAMANHO_PAGINA;
+      return construir(inicio, inicio + TAMANHO_PAGINA - 1);
+    })
+  );
+
+  const todas = linhasPrimeira.slice();
+  for (const { data, error } of paginasRestantes) {
     if (error) throw error;
-    const linhas = data ?? [];
-    todas.push(...linhas);
-    if (linhas.length < TAMANHO_PAGINA) break;
-    inicio += TAMANHO_PAGINA;
+    todas.push(...(data ?? []));
   }
   return todas;
 }
@@ -132,25 +149,29 @@ export async function buscarResultadosMensais(): Promise<ResultadoMensal[]> {
   // geral agora agrupam pelo mês/ano do NOME DO ARQUIVO de origem.
   //
   // Paginado (ver buscarTodasPaginado acima) — essas três consultas somam
-  // TODO o histórico, sem filtro nenhum, e pedidos_escola já passa de 1000
-  // linhas.
+  // TODO o histórico, sem filtro nenhum, e pedidos_escola/gastos já passam
+  // de 1000 linhas.
   const [pedidosEscola, pedidosAvulsos, gastos, mapaContextoEscola] = await Promise.all([
     buscarTodasPaginado((inicio, fim) =>
       supabaseServer
         .from('pedidos_escola')
-        .select('valor_total, arquivo_origem')
+        .select('valor_total, arquivo_origem', { count: 'exact' })
         .order('id', { ascending: true })
         .range(inicio, fim)
     ),
     buscarTodasPaginado((inicio, fim) =>
       supabaseServer
         .from('pedidos_avulsos')
-        .select('valor_total, arquivo_origem')
+        .select('valor_total, arquivo_origem', { count: 'exact' })
         .order('id', { ascending: true })
         .range(inicio, fim)
     ),
     buscarTodasPaginado((inicio, fim) =>
-      supabaseServer.from('gastos').select('valor, arquivo_origem').order('id', { ascending: true }).range(inicio, fim)
+      supabaseServer
+        .from('gastos')
+        .select('valor, arquivo_origem', { count: 'exact' })
+        .order('id', { ascending: true })
+        .range(inicio, fim)
     ),
     buscarMapaContextoEscolaPorNome(),
   ]);
@@ -229,7 +250,7 @@ export async function buscarClientesResumo(mes: string): Promise<ClienteResumo[]
   const data = await buscarTodasPaginado((inicio, fim) =>
     supabaseServer
       .from('pedidos_avulsos')
-      .select('cliente_nome_bruto, valor_total, descricao_pedido, data, contextos(nome)')
+      .select('cliente_nome_bruto, valor_total, descricao_pedido, data, contextos(nome)', { count: 'exact' })
       .order('data', { ascending: true })
       .order('id', { ascending: true })
       .range(inicio, fim)
@@ -324,7 +345,7 @@ export async function buscarPratosComparativo(mes: string): Promise<PratoCompara
   const data = await buscarTodasPaginado((inicio, fim) =>
     supabaseServer
       .from('pedidos_avulsos')
-      .select('descricao_pedido, data')
+      .select('descricao_pedido, data', { count: 'exact' })
       .order('id', { ascending: true })
       .range(inicio, fim)
   );
@@ -397,6 +418,48 @@ export async function buscarPendencias(mes: string): Promise<Pendencia[]> {
   return [...listaPendentes, ...listaSemPedido].sort((a, b) => b.diasEmAberto - a.diasEmAberto);
 }
 
+// "Dias trabalhados" (dias distintos com entrega de verdade — marmita ou
+// lanche > 0) pro período/contexto selecionado. Antes era calculado no
+// client a partir do `detalhamento` completo; virou uma busca própria,
+// bem mais enxuta (só 3 colunas, sem montar as ~15 colunas do
+// Detalhamento nem ordenar/agrupar o resto), porque em "Todos os
+// períodos" (Lote 26) o Detalhamento deixou de ser buscado por padrão —
+// ver buscarDetalhamento (Lote 28, 2026-09-08).
+export async function buscarDiasTrabalhados(mes: string, contexto: FiltroContexto): Promise<number> {
+  const prefixoArquivo = mes ? anoMesCompacto(mes) : null;
+  const datas = new Set<string>();
+
+  if (contexto !== 'AVULSOS') {
+    const dataEscola = await buscarTodasPaginado((inicio, fim) => {
+      let query = supabaseServer
+        .from('pedidos_escola')
+        .select('data, qtd_marmitas, qtd_lanches', { count: 'exact' })
+        .order('id', { ascending: true });
+      if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
+      return query.range(inicio, fim);
+    });
+    for (const l of dataEscola) {
+      if (l.data && ((l.qtd_marmitas ?? 0) > 0 || (l.qtd_lanches ?? 0) > 0)) datas.add(l.data);
+    }
+  }
+
+  if (contexto !== 'ESCOLA') {
+    const dataAvulsos = await buscarTodasPaginado((inicio, fim) => {
+      let query = supabaseServer
+        .from('pedidos_avulsos')
+        .select('data, qtd_marmitas, qtd_lanches', { count: 'exact' })
+        .order('id', { ascending: true });
+      if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
+      return query.range(inicio, fim);
+    });
+    for (const l of dataAvulsos) {
+      if (l.data && ((l.qtd_marmitas ?? 0) > 0 || (l.qtd_lanches ?? 0) > 0)) datas.add(l.data);
+    }
+  }
+
+  return datas.size;
+}
+
 // Detalhamento do período pra Visão geral — junta pedidos_escola e
 // pedidos_avulsos num formato comum, respeitando o filtro de contexto
 // (Escola + Avulsos / Só Escola / Só Avulsos).
@@ -406,16 +469,12 @@ export async function buscarPendencias(mes: string): Promise<Pendencia[]> {
 // "isso é de agosto/2026, contexto CAJ", mesmo que alguma linha tenha uma
 // data de outro mês.
 //
-// `mes === ''` significa "Todos os períodos" (Visão geral, Lote 26,
-// 2026-09-08): busca sem filtro de arquivo_origem, e o "Ano/Mês" de cada
-// linha (`anoMes`) passa a ser calculado LINHA A LINHA a partir do próprio
-// arquivo de origem — antes disso, com um mês sempre selecionado, um único
-// `anoMesLabel` valia pra todo o resultado.
-//
-// Sempre paginado (ver buscarTodasPaginado, Lote 27) — com um mês
-// selecionado o resultado é pequeno (bem menos de 1000 linhas), mas em
-// "Todos os períodos" é o histórico inteiro de pedidos_escola/avulsos, que
-// já passa de 1000.
+// `mes === ''` significa "Todos os períodos" — chamado só quando o
+// próprio usuário decide ver o detalhamento linha a linha mesmo sem
+// filtro de período (ver app/visao-geral/page.tsx, Lote 28: por padrão,
+// em "Todos os períodos" essa busca nem roda — não faz sentido carregar e
+// renderizar milhares de linhas de pedido de uma vez só, e era a maior
+// causa da Visão geral demorar pra responder nesse modo).
 export async function buscarDetalhamento(
   mes: string,
   contexto: FiltroContexto
@@ -428,7 +487,8 @@ export async function buscarDetalhamento(
       let query = supabaseServer
         .from('pedidos_escola')
         .select(
-          'data, tipo_lancamento, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, obs, arquivo_origem'
+          'data, tipo_lancamento, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, obs, arquivo_origem',
+          { count: 'exact' }
         )
         .order('id', { ascending: true });
       if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
@@ -464,7 +524,8 @@ export async function buscarDetalhamento(
       let query = supabaseServer
         .from('pedidos_avulsos')
         .select(
-          'data, cliente_nome_bruto, descricao_pedido, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, valor_pago, data_pagamento, obs, arquivo_origem'
+          'data, cliente_nome_bruto, descricao_pedido, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, valor_pago, data_pagamento, obs, arquivo_origem',
+          { count: 'exact' }
         )
         .order('id', { ascending: true });
       if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
@@ -508,16 +569,15 @@ export async function buscarDetalhamento(
 // de arquivos de contexto escola (CAJ/BARRA); "Só Avulsos", só os de
 // contexto avulso (EXTRA/CASA/SAQUE/CENE); "Todos" mostra tudo.
 //
-// `mes === ''` = "Todos os períodos" (Visão geral, Lote 26, 2026-09-08):
-// mesma lógica de buscarDetalhamento, sem filtro de arquivo_origem — e
-// também paginado (Lote 27), já que gastos passa de 1000 linhas.
+// `mes === ''` = "Todos os períodos" — mesma observação de
+// buscarDetalhamento acima: não é chamada por padrão nesse modo.
 export async function buscarGastosDetalhado(mes: string, contexto: FiltroContexto): Promise<GastoDetalhado[]> {
   const prefixoArquivo = mes ? anoMesCompacto(mes) : null;
   const [data, mapaContextoEscola] = await Promise.all([
     buscarTodasPaginado((inicio, fim) => {
       let query = supabaseServer
         .from('gastos')
-        .select('data, pessoa_local, tipo_pagamento, valor, arquivo_origem')
+        .select('data, pessoa_local, tipo_pagamento, valor, arquivo_origem', { count: 'exact' })
         .order('id', { ascending: true });
       if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
       return query.range(inicio, fim);
@@ -570,7 +630,7 @@ export async function buscarCobrancas(): Promise<Cobranca[]> {
   const pendentes = await buscarTodasPaginado((inicio, fim) =>
     supabaseServer
       .from('pedidos_avulsos')
-      .select('data, cliente_nome_bruto, valor_total, descricao_pedido')
+      .select('data, cliente_nome_bruto, valor_total, descricao_pedido', { count: 'exact' })
       .eq('status_pedido', 'PENDENTE')
       .order('data', { ascending: true })
       .order('id', { ascending: true })
