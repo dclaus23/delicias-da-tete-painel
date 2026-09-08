@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <title>Delícias da Tetê · Painel</title>
+  <link rel="icon" href="assets/img/logo.jpg">
+  <link rel="stylesheet" href="assets/css/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ── LOGIN ── -->
+<div id="loginModal">
+  <div class="login-box">
+    <img src="assets/img/logo.jpg" alt="Delícias da Tetê">
+    <h2>Delícias da Tetê</h2>
+    <p class="sub">Acesse com seu email e senha</p>
+    <form id="loginForm">
+      <div class="login-field">
+        <label>Email</label>
+        <input id="loginEmail" type="email" required autocomplete="email" placeholder="seu@email.com">
+      </div>
+      <div class="login-field">
+        <label>Senha</label>
+        <input id="loginPass" type="password" required autocomplete="current-password" placeholder="••••••••">
+      </div>
+      <p id="loginError"></p>
+      <button id="loginBtn" type="submit">Entrar</button>
+    </form>
+  </div>
+</div>
+
+<!-- ── APP ── -->
+<div id="appShell" style="display:none">
+  <header class="hd">
+    <div class="hd-brand">
+      <img src="assets/img/logo.jpg" alt="">
+      <div>
+        <div class="hd-name">Delícias da Tetê</div>
+        <div class="hd-sub">Painel de gestão</div>
+      </div>
+    </div>
+    <div class="hd-right">
+      <span class="sync-badge" id="syncBadge"></span>
+      <div class="status-pill">
+        <div class="dot spin" id="statusDot"></div>
+        <span class="dot-txt" id="statusTxt">Iniciando...</span>
+      </div>
+      <button class="btn-sair" id="btnSair">Sair</button>
+    </div>
+  </header>
+
+  <nav class="pages">
+    <button class="pg active">📊 Visão geral</button>
+    <button class="pg disabled" title="Em breve">🍱 Avulsas</button>
+    <button class="pg disabled" title="Em breve">💬 Cobrança</button>
+  </nav>
+
+  <div class="pbar">
+    <span class="plbl">Período</span>
+    <select class="pfsel" id="selPeriodo"></select>
+    <span class="plbl">Contexto</span>
+    <select class="pfsel" id="selContexto">
+      <option value="TODOS">Escola + Avulsos</option>
+      <option value="ESCOLA">Só Escola</option>
+      <option value="AVULSOS">Só Avulsos</option>
+    </select>
+  </div>
+
+  <main class="main">
+    <div id="vg"></div>
+  </main>
+</div>
+
+<script type="module" src="assets/js/app.js"></script>
+</body>
+</html>
