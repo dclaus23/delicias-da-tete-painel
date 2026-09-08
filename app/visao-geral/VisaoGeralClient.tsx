@@ -2,7 +2,7 @@
 
 import { Suspense, useMemo } from 'react';
 import type { ResultadoMensal, FiltroContexto, DetalheLancamento, GastoDetalhado } from '@/lib/types';
-import { faturamentoTotal, variacaoMoM, formatarMoeda, formatarPercentual, nomeMes } from '@/lib/calculos';
+import { faturamentoTotal, variacaoMoM, formatarMoeda, formatarPercentual, anoMesBarra } from '@/lib/calculos';
 import BarraFiltros from '@/components/BarraFiltros';
 import KpiCard from '@/components/KpiCard';
 import GraficoIndicadorMensal from '@/components/GraficoIndicadorMensal';
@@ -214,10 +214,12 @@ export default function VisaoGeralClient({
   });
 
   // Em "Todos os períodos" o gráfico cruza vários anos, então o rótulo de
-  // cada barra passa a incluir o ano (nomeMes) em vez de só o mês
-  // (nomeMesCurto, o padrão) — do contrário "ago" ficaria ambíguo entre
-  // 2025 e 2026, por exemplo.
-  const formatarRotuloMes = todosOsPeriodos ? nomeMes : undefined;
+  // cada barra passa a incluir o ano em vez de só o mês (nomeMesCurto, o
+  // padrão) — do contrário "ago" ficaria ambíguo entre 2025 e 2026, por
+  // exemplo. Formato "AAAA/MM" (anoMesBarra), igual ao Qlik Sense — a
+  // primeira versão usava "ago de 26", que a Tereza achou confuso (Lote
+  // 27, 2026-09-08).
+  const formatarRotuloMes = todosOsPeriodos ? anoMesBarra : undefined;
 
   return (
     <div className="flex flex-col gap-6">
@@ -231,7 +233,14 @@ export default function VisaoGeralClient({
         </Suspense>
       </header>
 
-      <section className="grid grid-cols-2 gap-3 lg:grid-cols-7">
+      {/* grid-cols-2 base + sm:grid-cols-3 evita que os cards fiquem
+         apertados demais em telas de celular estreitas (< 640px) — sem
+         esse degrau intermediário, os 7 KPIs ficavam só em 2 colunas até
+         a tela virar desktop, e valores mais longos (ex.: "-146,1%")
+         empurravam o card e "atropelavam" o vizinho (reportado pela
+         Tereza no Lote 27, 2026-09-08). O resto da correção — min-w-0 e
+         o tamanho de fonte responsivo — está no próprio KpiCard. */}
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-7">
         <KpiCard
           rotulo="Faturamento"
           valor={formatarMoeda(faturamentoExibido)}

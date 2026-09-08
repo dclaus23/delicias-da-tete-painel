@@ -70,3 +70,12 @@ export function mesAnterior(mesIso: string) {
 export function mesDaData(dataIso: string) {
   return dataIso.slice(0, 7);
 }
+
+// "2026-08" -> "2026/08" — rótulo de mês pros gráficos em "Todos os
+// períodos" (Visão geral), que mostram o histórico inteiro cruzando vários
+// anos. Troca "ago de 26" (nomeMes) por esse formato porque é o que a
+// Tereza já usa no Qlik Sense, e ela achou "ago de 26" confuso (Lote 27,
+// 2026-09-08).
+export function anoMesBarra(mesIso: string) {
+  return mesIso.replace('-', '/');
+}

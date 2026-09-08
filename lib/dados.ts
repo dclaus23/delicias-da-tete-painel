@@ -18,6 +18,42 @@ import type {
 // gastos da Visão geral (confirmado com a Tereza em 2026-08-30).
 const NOMES_COLABORADORES = ['Vanessa', 'Guacira'];
 
+// O Supabase/PostgREST limita cada resposta a no máximo 1000 linhas por
+// padrão, mesmo sem VOCÊ ter pedido limite nenhum — silenciosamente, sem
+// erro. pedidos_escola já passou de 1000 linhas em 2026-09, então um
+// select sem filtro de arquivo_origem (como o dos gráficos/KPIs da Visão
+// geral, que somam TODO o histórico) vinha voltando cortado bem nas linhas
+// mais recentes.
+//
+// Foi ISSO — e não as variáveis de ambiente do Vercel nem os gastos
+// duplicados (os dois eram problemas reais, mas de outra causa) — que fez
+// o Faturamento de Junho/2026 aparecer errado pra Tereza (Lote 27,
+// 2026-09-08): confirmado direto no banco, os primeiros 1000 registros
+// (sem ORDER BY, ordem física da tabela) de pedidos_escola somam só R$874
+// de junho, contra os R$10.791 reais — o resto das linhas de junho ficava
+// depois do corte de 1000.
+//
+// Daqui pra frente, toda consulta que pode passar de 1000 linhas usa esse
+// helper: pagina em blocos de 1000 (com ORDER BY estável, senão a
+// paginação pode pular ou repetir linha entre uma página e outra) até
+// esgotar a tabela, em vez de confiar no limite padrão do PostgREST.
+async function buscarTodasPaginado(
+  construir: (inicio: number, fim: number) => PromiseLike<{ data: any[] | null; error: any }>
+): Promise<any[]> {
+  const TAMANHO_PAGINA = 1000;
+  const todas: any[] = [];
+  let inicio = 0;
+  for (;;) {
+    const { data, error } = await construir(inicio, inicio + TAMANHO_PAGINA - 1);
+    if (error) throw error;
+    const linhas = data ?? [];
+    todas.push(...linhas);
+    if (linhas.length < TAMANHO_PAGINA) break;
+    inicio += TAMANHO_PAGINA;
+  }
+  return todas;
+}
+
 // Converte "2026-03-01" (date do Postgres) -> "2026-03" (formato usado no front)
 function paraMesIso(data: string) {
   return data.slice(0, 7);
@@ -94,20 +130,30 @@ export async function buscarResultadosMensais(): Promise<ResultadoMensal[]> {
   // Não usa mais as views vw_faturamento_mensal/vw_gastos_mensal (que
   // agrupam por date_trunc da coluna `data`) — os gráficos e KPIs da Visão
   // geral agora agrupam pelo mês/ano do NOME DO ARQUIVO de origem.
-  const [
-    { data: pedidosEscola, error: erroPedidosEscola },
-    { data: pedidosAvulsos, error: erroPedidosAvulsos },
-    { data: gastos, error: erroGastos },
-    mapaContextoEscola,
-  ] = await Promise.all([
-    supabaseServer.from('pedidos_escola').select('valor_total, arquivo_origem'),
-    supabaseServer.from('pedidos_avulsos').select('valor_total, arquivo_origem'),
-    supabaseServer.from('gastos').select('valor, arquivo_origem'),
+  //
+  // Paginado (ver buscarTodasPaginado acima) — essas três consultas somam
+  // TODO o histórico, sem filtro nenhum, e pedidos_escola já passa de 1000
+  // linhas.
+  const [pedidosEscola, pedidosAvulsos, gastos, mapaContextoEscola] = await Promise.all([
+    buscarTodasPaginado((inicio, fim) =>
+      supabaseServer
+        .from('pedidos_escola')
+        .select('valor_total, arquivo_origem')
+        .order('id', { ascending: true })
+        .range(inicio, fim)
+    ),
+    buscarTodasPaginado((inicio, fim) =>
+      supabaseServer
+        .from('pedidos_avulsos')
+        .select('valor_total, arquivo_origem')
+        .order('id', { ascending: true })
+        .range(inicio, fim)
+    ),
+    buscarTodasPaginado((inicio, fim) =>
+      supabaseServer.from('gastos').select('valor, arquivo_origem').order('id', { ascending: true }).range(inicio, fim)
+    ),
     buscarMapaContextoEscolaPorNome(),
   ]);
-  if (erroPedidosEscola) throw erroPedidosEscola;
-  if (erroPedidosAvulsos) throw erroPedidosAvulsos;
-  if (erroGastos) throw erroGastos;
 
   const porMes = new Map<
     string,
@@ -120,17 +166,17 @@ export async function buscarResultadosMensais(): Promise<ResultadoMensal[]> {
     return atual;
   }
 
-  for (const linha of pedidosEscola ?? []) {
+  for (const linha of pedidosEscola) {
     const mes = mesDoArquivo(linha.arquivo_origem as string);
     if (!mes) continue;
     obterOuCriar(mes).escola += Number(linha.valor_total) || 0;
   }
-  for (const linha of pedidosAvulsos ?? []) {
+  for (const linha of pedidosAvulsos) {
     const mes = mesDoArquivo(linha.arquivo_origem as string);
     if (!mes) continue;
     obterOuCriar(mes).avulsos += Number(linha.valor_total) || 0;
   }
-  for (const linha of gastos ?? []) {
+  for (const linha of gastos) {
     const mes = mesDoArquivo(linha.arquivo_origem as string);
     if (!mes) continue;
     const atual = obterOuCriar(mes);
@@ -177,11 +223,17 @@ type LinhaPedidoAvulso = {
 // KPIs de topo, use buscarResumoAvulsosMes() em paralelo (soma TODAS as
 // linhas do mês, com ou sem nome).
 export async function buscarClientesResumo(mes: string): Promise<ClienteResumo[]> {
-  const { data, error } = await supabaseServer
-    .from('pedidos_avulsos')
-    .select('cliente_nome_bruto, valor_total, descricao_pedido, data, contextos(nome)')
-    .order('data', { ascending: true });
-  if (error) throw error;
+  // Paginado (ver buscarTodasPaginado) — pedidos_avulsos está perto de 1000
+  // linhas e essa busca não tem filtro de mês (precisa do histórico
+  // inteiro pra calcular "recorrente").
+  const data = await buscarTodasPaginado((inicio, fim) =>
+    supabaseServer
+      .from('pedidos_avulsos')
+      .select('cliente_nome_bruto, valor_total, descricao_pedido, data, contextos(nome)')
+      .order('data', { ascending: true })
+      .order('id', { ascending: true })
+      .range(inicio, fim)
+  );
 
   type Acumulado = {
     contexto: string;
@@ -192,7 +244,7 @@ export async function buscarClientesResumo(mes: string): Promise<ClienteResumo[]
   };
   const porCliente = new Map<string, Acumulado>();
 
-  for (const linha of (data ?? []) as LinhaPedidoAvulso[]) {
+  for (const linha of data as LinhaPedidoAvulso[]) {
     const nome = linha.cliente_nome_bruto?.trim();
     if (!nome || !linha.data) continue;
     const mesLinha = paraMesIso(linha.data);
@@ -268,14 +320,20 @@ export async function buscarResumoAvulsosMes(mes: string): Promise<ResumoAvulsos
 // Top 5 pratos do mês selecionado, com a quantidade do mesmo prato no mês
 // calendário anterior (0 se não apareceu).
 export async function buscarPratosComparativo(mes: string): Promise<PratoComparativo[]> {
-  const { data, error } = await supabaseServer.from('pedidos_avulsos').select('descricao_pedido, data');
-  if (error) throw error;
+  // Paginado (ver buscarTodasPaginado) — mesma razão de buscarClientesResumo.
+  const data = await buscarTodasPaginado((inicio, fim) =>
+    supabaseServer
+      .from('pedidos_avulsos')
+      .select('descricao_pedido, data')
+      .order('id', { ascending: true })
+      .range(inicio, fim)
+  );
 
   const mesAnt = mesAnterior(mes);
   const contagemMes = new Map<string, number>();
   const contagemAnterior = new Map<string, number>();
 
-  for (const linha of data ?? []) {
+  for (const linha of data) {
     const prato = linha.descricao_pedido?.trim();
     if (!prato || !linha.data) continue;
     const mesLinha = paraMesIso(linha.data);
@@ -353,6 +411,11 @@ export async function buscarPendencias(mes: string): Promise<Pendencia[]> {
 // linha (`anoMes`) passa a ser calculado LINHA A LINHA a partir do próprio
 // arquivo de origem — antes disso, com um mês sempre selecionado, um único
 // `anoMesLabel` valia pra todo o resultado.
+//
+// Sempre paginado (ver buscarTodasPaginado, Lote 27) — com um mês
+// selecionado o resultado é pequeno (bem menos de 1000 linhas), mas em
+// "Todos os períodos" é o histórico inteiro de pedidos_escola/avulsos, que
+// já passa de 1000.
 export async function buscarDetalhamento(
   mes: string,
   contexto: FiltroContexto
@@ -361,15 +424,17 @@ export async function buscarDetalhamento(
   const linhas: DetalheLancamento[] = [];
 
   if (contexto !== 'AVULSOS') {
-    let query = supabaseServer
-      .from('pedidos_escola')
-      .select(
-        'data, tipo_lancamento, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, obs, arquivo_origem'
-      );
-    if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
-    const { data, error } = await query;
-    if (error) throw error;
-    for (const l of data ?? []) {
+    const dataEscola = await buscarTodasPaginado((inicio, fim) => {
+      let query = supabaseServer
+        .from('pedidos_escola')
+        .select(
+          'data, tipo_lancamento, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, obs, arquivo_origem'
+        )
+        .order('id', { ascending: true });
+      if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
+      return query.range(inicio, fim);
+    });
+    for (const l of dataEscola) {
       const qtdMarmitas = l.qtd_marmitas ?? 0;
       const qtdLanches = l.qtd_lanches ?? 0;
       const valorUnitMarmita = Number(l.valor_unit_marmita) || 0;
@@ -395,15 +460,17 @@ export async function buscarDetalhamento(
   }
 
   if (contexto !== 'ESCOLA') {
-    let query = supabaseServer
-      .from('pedidos_avulsos')
-      .select(
-        'data, cliente_nome_bruto, descricao_pedido, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, valor_pago, data_pagamento, obs, arquivo_origem'
-      );
-    if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
-    const { data, error } = await query;
-    if (error) throw error;
-    for (const l of data ?? []) {
+    const dataAvulsos = await buscarTodasPaginado((inicio, fim) => {
+      let query = supabaseServer
+        .from('pedidos_avulsos')
+        .select(
+          'data, cliente_nome_bruto, descricao_pedido, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, valor_pago, data_pagamento, obs, arquivo_origem'
+        )
+        .order('id', { ascending: true });
+      if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
+      return query.range(inicio, fim);
+    });
+    for (const l of dataAvulsos) {
       const qtdMarmitas = l.qtd_marmitas ?? 0;
       const qtdLanches = l.qtd_lanches ?? 0;
       const valorUnitMarmita = Number(l.valor_unit_marmita) || 0;
@@ -442,22 +509,26 @@ export async function buscarDetalhamento(
 // contexto avulso (EXTRA/CASA/SAQUE/CENE); "Todos" mostra tudo.
 //
 // `mes === ''` = "Todos os períodos" (Visão geral, Lote 26, 2026-09-08):
-// mesma lógica de buscarDetalhamento, sem filtro de arquivo_origem.
+// mesma lógica de buscarDetalhamento, sem filtro de arquivo_origem — e
+// também paginado (Lote 27), já que gastos passa de 1000 linhas.
 export async function buscarGastosDetalhado(mes: string, contexto: FiltroContexto): Promise<GastoDetalhado[]> {
-  // Mesmo critério de período do resto da Visão geral: pelo nome do
-  // arquivo, não pela coluna `data` (ver buscarResultadosMensais).
-  let queryGastos = supabaseServer
-    .from('gastos')
-    .select('data, pessoa_local, tipo_pagamento, valor, arquivo_origem');
-  if (mes) queryGastos = queryGastos.ilike('arquivo_origem', `${anoMesCompacto(mes)}_%`);
-
-  const [{ data, error }, mapaContextoEscola] = await Promise.all([queryGastos, buscarMapaContextoEscolaPorNome()]);
-  if (error) throw error;
+  const prefixoArquivo = mes ? anoMesCompacto(mes) : null;
+  const [data, mapaContextoEscola] = await Promise.all([
+    buscarTodasPaginado((inicio, fim) => {
+      let query = supabaseServer
+        .from('gastos')
+        .select('data, pessoa_local, tipo_pagamento, valor, arquivo_origem')
+        .order('id', { ascending: true });
+      if (prefixoArquivo) query = query.ilike('arquivo_origem', `${prefixoArquivo}_%`);
+      return query.range(inicio, fim);
+    }),
+    buscarMapaContextoEscolaPorNome(),
+  ]);
 
   const nomesColaboradoras = NOMES_COLABORADORES.map((n) => n.trim().toLowerCase());
   const linhas: GastoDetalhado[] = [];
 
-  for (const l of data ?? []) {
+  for (const l of data) {
     const token = contextoDoArquivo(l.arquivo_origem as string);
     const ehEscola = token ? mapaContextoEscola.get(token) : undefined;
 
@@ -493,12 +564,18 @@ export async function buscarUltimaSincronizacao(): Promise<string | null> {
 // mês/ano é aplicado no client, sobre essa mesma lista — uma dívida antiga
 // não pode sumir só porque tem um filtro de mês selecionado por padrão).
 export async function buscarCobrancas(): Promise<Cobranca[]> {
-  const { data: pendentes, error: erroPendentes } = await supabaseServer
-    .from('pedidos_avulsos')
-    .select('data, cliente_nome_bruto, valor_total, descricao_pedido')
-    .eq('status_pedido', 'PENDENTE')
-    .order('data', { ascending: true });
-  if (erroPendentes) throw erroPendentes;
+  // Paginado (ver buscarTodasPaginado) — filtrado por PENDENTE, então hoje
+  // é uma lista pequena, mas sem paginação ela também ficaria sujeita ao
+  // mesmo corte silencioso de 1000 linhas se crescer.
+  const pendentes = await buscarTodasPaginado((inicio, fim) =>
+    supabaseServer
+      .from('pedidos_avulsos')
+      .select('data, cliente_nome_bruto, valor_total, descricao_pedido')
+      .eq('status_pedido', 'PENDENTE')
+      .order('data', { ascending: true })
+      .order('id', { ascending: true })
+      .range(inicio, fim)
+  );
 
   // A tabela `contatos` só existe depois da migração 0002 — se ainda não
   // rodou, degrada com elegância (mostra a mensagem, sem link de WhatsApp)
@@ -512,7 +589,7 @@ export async function buscarCobrancas(): Promise<Cobranca[]> {
     contatos = [];
   }
 
-  return (pendentes ?? [])
+  return pendentes
     .filter((linha) => linha.cliente_nome_bruto)
     .map((linha) => {
       const nome = linha.cliente_nome_bruto as string;
