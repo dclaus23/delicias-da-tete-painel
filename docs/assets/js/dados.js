@@ -17,6 +17,14 @@ async function buscarMapaContextoEscolaPorNome() {
 
 // Agregado mês a mês de TODO o histórico já sincronizado — alimenta os
 // gráficos, o dropdown de Período e (somado) os KPIs de "Todos os períodos".
+//
+// Lote 35 (2026-09-09): junto com o agregado por mês, monta também um
+// agregado por ARQUIVO (mesmos dados já buscados, sem nenhuma consulta
+// extra) — alimenta o filtro "Arquivo" da Visão geral com a lista completa
+// de arquivos de todo o histórico (não só do mês selecionado) e permite os
+// indicadores (Faturamento/Gastos/Lucro) refletirem um arquivo específico,
+// não só o mês inteiro. Pedido do David depois do Lote 34 (o filtro só
+// afetava as tabelas, não os KPIs, e só aparecia com um período escolhido).
 export async function buscarResultadosMensais() {
   const [pedidosEscola, pedidosAvulsos, gastos, mapaContextoEscola] = await Promise.all([
     buscarTodasPaginado((inicio, fim) =>
@@ -38,15 +46,26 @@ export async function buscarResultadosMensais() {
     return atual;
   }
 
+  const porArquivoMap = new Map();
+  function obterArquivo(arquivo, mes) {
+    if (!arquivo) return null;
+    if (!porArquivoMap.has(arquivo)) porArquivoMap.set(arquivo, { arquivo, mes, faturamento: 0, gastos: 0 });
+    return porArquivoMap.get(arquivo);
+  }
+
   for (const l of pedidosEscola) {
     const mes = mesDoArquivo(l.arquivo_origem);
     if (!mes) continue;
     obterOuCriar(mes).escola += num(l.valor_total);
+    const a = obterArquivo(l.arquivo_origem, mes);
+    if (a) a.faturamento += num(l.valor_total);
   }
   for (const l of pedidosAvulsos) {
     const mes = mesDoArquivo(l.arquivo_origem);
     if (!mes) continue;
     obterOuCriar(mes).avulsos += num(l.valor_total);
+    const a = obterArquivo(l.arquivo_origem, mes);
+    if (a) a.faturamento += num(l.valor_total);
   }
   for (const l of gastos) {
     const mes = mesDoArquivo(l.arquivo_origem);
@@ -58,9 +77,11 @@ export async function buscarResultadosMensais() {
     const ehEscola = token ? mapaContextoEscola.get(token) : undefined;
     if (ehEscola === true) atual.gastosEscola += valorBruto;
     else if (ehEscola === false) atual.gastosAvulsos += valorBruto;
+    const a = obterArquivo(l.arquivo_origem, mes);
+    if (a) a.gastos += valorBruto;
   }
 
-  return Array.from(porMes.entries())
+  const resultados = Array.from(porMes.entries())
     .map(([mes, v]) => ({
       mes,
       faturamentoEscola: v.escola,
@@ -70,28 +91,42 @@ export async function buscarResultadosMensais() {
       gastosAvulsos: v.gastosAvulsos,
     }))
     .sort((a, b) => a.mes.localeCompare(b.mes));
+
+  const porArquivo = Array.from(porArquivoMap.values()).sort((a, b) => a.arquivo.localeCompare(b.arquivo));
+
+  return { resultados, porArquivo };
 }
 
-// "Dias trabalhados" (dias distintos com entrega de verdade) do período/contexto.
-export async function buscarDiasTrabalhados(mes, contexto) {
+// "Dias trabalhados" (dias distintos com entrega de verdade) do
+// período/contexto — opcionalmente restrito a um arquivo específico (Lote
+// 35), pro filtro "Arquivo" também refletir nesse KPI. Um arquivo de Gastos
+// nunca bate com nenhuma linha de pedidos, então nesse caso o resultado é
+// 0 — correto, um arquivo de Gastos não tem "dias trabalhados" próprios.
+export async function buscarDiasTrabalhados(mes, contexto, arquivo = null) {
   const prefixo = mes ? anoMesCompacto(mes) : null;
   const datas = new Set();
 
   if (contexto !== 'AVULSOS') {
     const linhas = await buscarTodasPaginado((inicio, fim) => {
-      let q = sb.from('pedidos_escola').select('data, qtd_marmitas, qtd_lanches', { count: 'exact' }).order('id', { ascending: true });
+      let q = sb.from('pedidos_escola').select('data, qtd_marmitas, qtd_lanches, arquivo_origem', { count: 'exact' }).order('id', { ascending: true });
       if (prefixo) q = q.ilike('arquivo_origem', `${prefixo}_%`);
       return q.range(inicio, fim);
     });
-    for (const l of linhas) if (l.data && ((l.qtd_marmitas ?? 0) > 0 || (l.qtd_lanches ?? 0) > 0)) datas.add(l.data);
+    for (const l of linhas) {
+      if (arquivo && l.arquivo_origem !== arquivo) continue;
+      if (l.data && ((l.qtd_marmitas ?? 0) > 0 || (l.qtd_lanches ?? 0) > 0)) datas.add(l.data);
+    }
   }
   if (contexto !== 'ESCOLA') {
     const linhas = await buscarTodasPaginado((inicio, fim) => {
-      let q = sb.from('pedidos_avulsos').select('data, qtd_marmitas, qtd_lanches', { count: 'exact' }).order('id', { ascending: true });
+      let q = sb.from('pedidos_avulsos').select('data, qtd_marmitas, qtd_lanches, arquivo_origem', { count: 'exact' }).order('id', { ascending: true });
       if (prefixo) q = q.ilike('arquivo_origem', `${prefixo}_%`);
       return q.range(inicio, fim);
     });
-    for (const l of linhas) if (l.data && ((l.qtd_marmitas ?? 0) > 0 || (l.qtd_lanches ?? 0) > 0)) datas.add(l.data);
+    for (const l of linhas) {
+      if (arquivo && l.arquivo_origem !== arquivo) continue;
+      if (l.data && ((l.qtd_marmitas ?? 0) > 0 || (l.qtd_lanches ?? 0) > 0)) datas.add(l.data);
+    }
   }
   return datas.size;
 }

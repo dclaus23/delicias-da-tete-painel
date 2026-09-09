@@ -8,9 +8,11 @@ import {
 } from './utils.js';
 
 let _resultados = [];
+let _porArquivo = [];        // Lote 35: [{ arquivo, mes, faturamento, gastos }, ...] de TODO o histórico
+let _porArquivoMap = new Map();
 let _mesSelecionado = '';   // '' = Todos os períodos
 let _contexto = 'TODOS';
-let _arquivo = '';          // '' = Todos os arquivos do período (Lote 34)
+let _arquivo = '';          // '' = Todos os arquivos (Lote 34/35)
 let _sortCol = null;
 let _sortDir = 'asc';
 let _detalhamentoTodos = []; // Detalhamento do período, sem filtrar por arquivo
@@ -43,7 +45,10 @@ export async function boot() {
   const el = document.getElementById('vg');
   el.innerHTML = `<div style="padding:60px;text-align:center"><div class="spinner"></div></div>`;
 
-  _resultados = await buscarResultadosMensais();
+  const r = await buscarResultadosMensais();
+  _resultados = r.resultados;
+  _porArquivo = r.porArquivo;
+  _porArquivoMap = new Map(_porArquivo.map((a) => [a.arquivo, a]));
 
   if (!_resultados.length) {
     el.innerHTML = `
@@ -76,7 +81,12 @@ function buildPeriodoSelect() {
   sel.value = _mesSelecionado;
   sel.onchange = async () => {
     _mesSelecionado = sel.value;
-    _arquivo = ''; // mudou de período -> a lista de arquivos é outra, limpa a seleção anterior
+    // Se o arquivo selecionado não pertence ao novo período, limpa — senão
+    // mantém (ex: usuário volta pro período do arquivo que já tinha escolhido).
+    if (_arquivo) {
+      const info = _porArquivoMap.get(_arquivo);
+      if (!info || info.mes !== _mesSelecionado) _arquivo = '';
+    }
     killCharts();
     await render();
   };
@@ -92,47 +102,47 @@ function buildContextoSelect() {
   };
 }
 
-// Filtro "Arquivo" (Lote 34) — o David pediu depois de precisar caçar na mão
-// em qual arquivo estava um valor divergente do Qlik. Só aparece quando um
-// período específico está selecionado (é quando as tabelas de Detalhamento/
-// Gastos existem) e lista só os arquivos que realmente aparecem nesse
-// período — normalmente 1, mas pode ter mais de um (ex: arquivo principal +
-// "Prestadores" do mesmo mês).
+// Filtro "Arquivo" (Lote 34, ajustado no Lote 35) — o David pediu depois de
+// precisar caçar na mão em qual arquivo estava um valor divergente do Qlik.
+// Fica sempre visível (Lote 35: antes só aparecia com um período já
+// escolhido) — com um período selecionado, lista só os arquivos daquele mês
+// (o caso comum: 1, às vezes mais de um, ex. arquivo principal +
+// "Prestadores"); em "Todos os períodos", lista TODO o histórico, permitindo
+// pular direto pra um arquivo sem precisar escolher o período primeiro —
+// escolher um arquivo ali muda o Período sozinho pro mês dele.
 function buildArquivoSelect() {
   const lbl = document.getElementById('lblArquivo');
   const sel = document.getElementById('selArquivo');
-  const arquivos = Array.from(new Set(
-    [..._detalhamentoTodos, ..._gastosTodos].map((r) => r.arquivo).filter(Boolean)
-  )).sort();
+  const candidatos = _mesSelecionado
+    ? _porArquivo.filter((a) => a.mes === _mesSelecionado)
+    : _porArquivo;
 
-  if (!arquivos.length) {
+  if (!candidatos.length) {
     lbl.style.display = 'none';
     sel.style.display = 'none';
     sel.innerHTML = '';
-    _arquivo = '';
     return;
   }
 
-  if (!arquivos.includes(_arquivo)) _arquivo = '';
   lbl.style.display = '';
   sel.style.display = '';
   sel.innerHTML = ['<option value="">Todos os arquivos</option>']
-    .concat(arquivos.map((a) => `<option value="${a}">${a}</option>`))
+    .concat(candidatos.map((a) => `<option value="${a.arquivo}">${a.arquivo}</option>`))
     .join('');
   sel.value = _arquivo;
-  sel.onchange = () => {
+  sel.onchange = async () => {
     _arquivo = sel.value;
-    aplicarFiltroArquivo();
-    renderTabelaDetalhamento();
-    renderTabelaGastos();
+    const info = _arquivo ? _porArquivoMap.get(_arquivo) : null;
+    if (info && info.mes !== _mesSelecionado) {
+      // Escolheu um arquivo de outro período (ex: veio de "Todos os
+      // períodos") -> pula pro período dele, refaz tudo.
+      _mesSelecionado = info.mes;
+      const selPeriodo = document.getElementById('selPeriodo');
+      if (selPeriodo) selPeriodo.value = _mesSelecionado;
+      killCharts();
+    }
+    await render();
   };
-}
-
-function esconderArquivoSelect() {
-  const lbl = document.getElementById('lblArquivo');
-  const sel = document.getElementById('selArquivo');
-  if (lbl) lbl.style.display = 'none';
-  if (sel) sel.style.display = 'none';
 }
 
 function aplicarFiltroArquivo() {
@@ -144,10 +154,21 @@ async function render() {
   const el = document.getElementById('vg');
   const todosOsPeriodos = _mesSelecionado === '';
 
-  // KPIs + gráfico: "Todos os períodos" soma tudo; um mês específico compara
-  // com o mês calendário anterior (igual ao painel anterior).
+  buildArquivoSelect();
+
+  // KPIs + gráfico: com um Arquivo escolhido, mostra só a contribuição
+  // daquele arquivo (Lote 35 — ponto principal do pedido do David: ver a
+  // origem de um valor direto nos indicadores, não só nas tabelas);
+  // "Todos os períodos" soma tudo; um mês específico compara com o mês
+  // calendário anterior (igual ao painel anterior).
   let faturamento, gastos, diasTrabalhados, comp = null, tituloResumo;
-  if (todosOsPeriodos) {
+  if (_arquivo) {
+    const info = _porArquivoMap.get(_arquivo) || { faturamento: 0, gastos: 0 };
+    faturamento = info.faturamento; gastos = info.gastos;
+    // Sem comparação com o mês anterior aqui — não faz sentido comparar um
+    // arquivo específico com o mês inteiro anterior.
+    tituloResumo = `${nomeMesAno(_mesSelecionado)} — ${_arquivo}`;
+  } else if (todosOsPeriodos) {
     let f = 0, g = 0;
     for (const r of _resultados) {
       const red = reduzirContexto(r, _contexto);
@@ -176,7 +197,7 @@ async function render() {
   }
 
   el.innerHTML = `<div style="padding:60px;text-align:center"><div class="spinner"></div></div>`;
-  diasTrabalhados = await buscarDiasTrabalhados(_mesSelecionado, _contexto);
+  diasTrabalhados = await buscarDiasTrabalhados(_mesSelecionado, _contexto, _arquivo || null);
 
   const kpis = calcularKpis(faturamento, gastos, diasTrabalhados);
 
@@ -239,12 +260,9 @@ async function render() {
     ]);
     _detalhamentoTodos = det;
     _gastosTodos = gas;
-    buildArquivoSelect();
     aplicarFiltroArquivo();
     renderTabelaDetalhamento();
     renderTabelaGastos();
-  } else {
-    esconderArquivoSelect();
   }
 }
 
