@@ -7,8 +7,11 @@
   <link rel="icon" href="assets/img/logo.jpg">
   <link rel="stylesheet" href="assets/css/style.css">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
-  <!-- SheetJS (xlsx) — só usado pro botão "Baixar Excel" do Detalhamento (Lote 30) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <!-- ExcelJS — só usado pro botão "Baixar Excel" do Detalhamento (Lote 30/31).
+       Trocado de SheetJS pro ExcelJS no Lote 31 porque precisávamos colorir a
+       célula de OBS quando preenchida, e a versão grátis do SheetJS não
+       aplica estilo de célula (só o ExcelJS faz isso no navegador). -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 </head>
 <body>
 

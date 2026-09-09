@@ -2,7 +2,7 @@
 // Next.js anterior), incluindo a paginação que corrigiu o bug de Junho/2026
 // (Lote 27/28) e o critério de contexto/período pelo NOME DO ARQUIVO (Lote 5/8).
 import { sb, buscarTodasPaginado } from './supabase-client.js';
-import { mesDoArquivo, contextoDoArquivo, anoMesCompacto, num } from './utils.js';
+import { mesDoArquivo, contextoDoArquivo, anoMesCompacto, anoMesBarra, num } from './utils.js';
 
 const NOMES_COLABORADORES = ['vanessa', 'guacira'];
 
@@ -96,13 +96,24 @@ export async function buscarDiasTrabalhados(mes, contexto) {
   return datas.size;
 }
 
-// Detalhamento do período — SÓ Escola (Lote 30, 2026-09-08): esta tabela
-// alimenta o Excel que a Tereza manda pro tesoureiro da escola conferir e
-// pagar (mesmo fluxo do Lote 10 do painel Next.js antigo), então ignora de
-// propósito o filtro "Contexto" da Visão geral — mesmo com "Escola +
-// Avulsos" ou "Só Avulsos" selecionado ali em cima, esta tabela nunca traz
-// pedido avulso, pra não arriscar um pedido de cliente avulso ir parar num
-// documento pensado pra escola.
+// Detalhamento do período — SÓ Escola (Lote 30/31, 2026-09-08/09): esta
+// tabela alimenta o Excel que a Tereza manda pro tesoureiro da escola
+// conferir e pagar (mesmo fluxo do Lote 10 do painel Next.js antigo), então
+// ignora de propósito o filtro "Contexto" da Visão geral — mesmo com
+// "Escola + Avulsos" ou "Só Avulsos" selecionado ali em cima, esta tabela
+// nunca traz pedido avulso, pra não arriscar um pedido de cliente avulso ir
+// parar num documento pensado pra escola.
+//
+// Colunas replicadas 1:1 do relatório "Detalhamento | Entregas" que a
+// Tereza já usa no Qlik Sense (Lote 31) — inclusive o valor unitário de
+// marmita/lanche (guardado por linha no Supabase, não recalculado) e a
+// separação Valor Total Lanches / Valor Total Marmitas (qtd × unitário; a
+// soma dos dois bate com `valor_total`, conferido por SQL). `pedidos_escola`
+// não tem coluna de status/valor pago nem data de pagamento (isso só existe
+// pra Avulsos) — no relatório original do Qlik "Valor a ser pago" e "Valor
+// pago" sempre saem iguais pra Escola e "Data pagamento" sempre em branco,
+// então replicamos exatamente esse comportamento aqui em vez de inventar um
+// dado que não existe.
 //
 // Só é chamada com um mês específico selecionado (em "Todos os períodos"
 // seria o histórico inteiro de uma vez, o que deixava a Visão geral lenta —
@@ -113,20 +124,31 @@ export async function buscarDetalhamentoEscola(mes) {
 
   const dataEscola = await buscarTodasPaginado((inicio, fim) => {
     let q = sb.from('pedidos_escola')
-      .select('data, tipo_lancamento, qtd_marmitas, qtd_lanches, valor_total, obs, arquivo_origem', { count: 'exact' })
+      .select('data, qtd_marmitas, qtd_lanches, valor_unit_marmita, valor_unit_lanche, valor_total, obs, arquivo_origem', { count: 'exact' })
       .order('id', { ascending: true });
     if (prefixo) q = q.ilike('arquivo_origem', `${prefixo}_%`);
     return q.range(inicio, fim);
   });
   for (const l of dataEscola) {
+    const qtdMarmitas = l.qtd_marmitas ?? 0;
+    const qtdLanches = l.qtd_lanches ?? 0;
+    const valorUnitMarmita = num(l.valor_unit_marmita);
+    const valorUnitLanche = num(l.valor_unit_lanche);
+    const valorASerPago = num(l.valor_total);
+    const mesArquivo = mesDoArquivo(l.arquivo_origem);
     linhas.push({
+      anoMes: mesArquivo ? anoMesBarra(mesArquivo) : null,
       data: l.data,
-      origem: `Escola (${contextoDoArquivo(l.arquivo_origem) ?? '—'})`,
-      quem: l.tipo_lancamento === 'PROFESSORES' ? 'Professores' : 'Alunos',
-      qtdMarmitas: l.qtd_marmitas ?? 0,
-      qtdLanches: l.qtd_lanches ?? 0,
-      valorTotal: num(l.valor_total),
+      qtdMarmitas,
+      qtdLanches,
+      valorUnitLanche,
+      valorUnitMarmita,
+      valorTotalLanches: qtdLanches * valorUnitLanche,
+      valorTotalMarmitas: qtdMarmitas * valorUnitMarmita,
+      valorASerPago,
+      valorPago: valorASerPago,
       obs: l.obs,
+      dataPagamento: null,
     });
   }
   return linhas.sort((a, b) => (b.data ?? '').localeCompare(a.data ?? ''));

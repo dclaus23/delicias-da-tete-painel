@@ -82,6 +82,14 @@ export function paraMesIso(dataIso) {
   return dataIso.slice(0, 7);
 }
 
+// "2026-08-04" -> "04/08/2026" (mesmo formato de data do relatório do Qlik
+// Sense) — Lote 31. Célula vazia vira "-" (igual ao Qlik), não "—".
+export function fmtData(dataIso) {
+  if (!dataIso) return '-';
+  const [ano, mes, dia] = dataIso.split('-');
+  return `${dia}/${mes}/${ano}`;
+}
+
 // ─── Gráficos (Chart.js) ───────────────────────────────────────────────────
 let _charts = {};
 
@@ -164,7 +172,17 @@ export function renderTable(thId, tbId, cols, labels, rows, opts = {}) {
     const v = r[col];
     const f = formatCol[col];
     if (f === 'moeda') return `<td class="tr bold">${fmt(v)}</td>`;
-    if (f === 'centro') return `<td class="tc">${v ?? '—'}</td>`;
+    // "-" pra zero/vazio, igual ao relatório do Qlik Sense (Lote 31) — em
+    // vez de mostrar "0", que polui a leitura numa tabela com várias colunas.
+    if (f === 'centro') return `<td class="tc">${v ? v : '-'}</td>`;
+    if (f === 'data') return `<td>${fmtData(v)}</td>`;
+    // OBS destacado quando preenchido (Lote 31) — mesmo padrão visual do
+    // Qlik: fundo amarelo só quando a linha tem alguma observação.
+    if (f === 'obs') {
+      const s = v ? String(v) : '';
+      const disp = s ? (s.length > 60 ? s.slice(0, 60) + '…' : s) : '-';
+      return `<td class="${s ? 'obs-fill' : ''}">${disp}</td>`;
+    }
     const s = v != null ? String(v) : '—';
     return `<td>${s.length > 60 ? s.slice(0, 60) + '…' : s}</td>`;
   }).join('') + '</tr>').join('');

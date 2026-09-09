@@ -157,6 +157,12 @@ tr.row-total td {
   color: var(--cafe);
 }
 tr.row-total:hover td { background: var(--surf); }
+
+/* OBS destacado quando preenchido (Lote 31) — mesmo padrão visual do
+   relatório do Qlik Sense da Tereza: fundo amarelo só quando a linha tem
+   alguma observação. */
+td.obs-fill { background: #FFF3B0; font-weight: 600; color: var(--cafe); }
+tr:hover td.obs-fill { background: #FFEA8A; }
 .tw { overflow-x: auto; max-height: 440px; overflow-y: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th {

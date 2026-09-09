@@ -4,7 +4,7 @@ import {
 } from './dados.js';
 import {
   fmt, fmtPct, num, mkC, killCharts, barOpts, kpiHTML, renderTable,
-  nomeMesAno, nomeMesCurto, anoMesBarra, mesAnterior, variacaoMoM,
+  nomeMesAno, nomeMesCurto, anoMesBarra, mesAnterior, variacaoMoM, fmtData,
 } from './utils.js';
 
 let _resultados = [];
@@ -208,15 +208,28 @@ function renderGraficos(todosOsPeriodos) {
   mkC('chLuc', { type: 'bar', data: { labels, datasets: [{ data: lucs, backgroundColor: '#3C8558', borderRadius: 6 }] }, options: barOpts() });
 }
 
-const LABELS_DET = { data: 'Data', origem: 'Origem', quem: 'Quem', qtdMarmitas: 'Marmitas', qtdLanches: 'Lanches', valorTotal: 'Valor', obs: 'Obs.' };
-const COLS_DET = ['data', 'origem', 'quem', 'qtdMarmitas', 'qtdLanches', 'valorTotal', 'obs'];
+// Colunas replicadas 1:1 do relatório "Detalhamento | Entregas" que a
+// Tereza já usa no Qlik Sense (mesma ordem, mesmos rótulos) — Lote 31.
+const LABELS_DET = {
+  anoMes: 'Ano/Mês', data: 'Data entrega',
+  qtdMarmitas: 'Qtd. Marmitas', qtdLanches: 'Qtd. Lanches',
+  valorUnitLanche: 'Lanches (unit.)', valorUnitMarmita: 'Marmitas (unit.)',
+  valorTotalLanches: 'Valor Total Lanches', valorTotalMarmitas: 'Valor Total Marmitas',
+  valorASerPago: 'Valor a ser pago', valorPago: 'Valor pago',
+  obs: 'OBS', dataPagamento: 'Data pagamento',
+};
+const COLS_DET = [
+  'anoMes', 'data', 'qtdMarmitas', 'qtdLanches',
+  'valorUnitLanche', 'valorUnitMarmita', 'valorTotalLanches', 'valorTotalMarmitas',
+  'valorASerPago', 'valorPago', 'obs', 'dataPagamento',
+];
+const COLS_DET_MOEDA = ['valorUnitLanche', 'valorUnitMarmita', 'valorTotalLanches', 'valorTotalMarmitas', 'valorASerPago', 'valorPago'];
+const COLS_DET_NUM = new Set(['qtdMarmitas', 'qtdLanches', ...COLS_DET_MOEDA]);
 
 function totaisDetalhamento() {
-  return {
-    marmitas: _detalhamentoAtual.reduce((s, r) => s + num(r.qtdMarmitas), 0),
-    lanches: _detalhamentoAtual.reduce((s, r) => s + num(r.qtdLanches), 0),
-    valor: _detalhamentoAtual.reduce((s, r) => s + num(r.valorTotal), 0),
-  };
+  const t = {};
+  for (const c of COLS_DET_MOEDA) t[c] = _detalhamentoAtual.reduce((s, r) => s + num(r[c]), 0);
+  return t;
 }
 
 function renderTabelaDetalhamento() {
@@ -225,13 +238,16 @@ function renderTabelaDetalhamento() {
     const dir = _sortDir === 'asc' ? 1 : -1;
     rows.sort((a, b) => {
       const av = a[_sortCol], bv = b[_sortCol];
-      if (_sortCol === 'valorTotal' || _sortCol === 'qtdMarmitas' || _sortCol === 'qtdLanches') return (num(av) - num(bv)) * dir;
+      if (COLS_DET_NUM.has(_sortCol)) return (num(av) - num(bv)) * dir;
       return String(av ?? '').localeCompare(String(bv ?? ''), 'pt-BR') * dir;
     });
   }
+  const formatCol = { data: 'data', dataPagamento: 'data', qtdMarmitas: 'centro', qtdLanches: 'centro', obs: 'obs' };
+  for (const c of COLS_DET_MOEDA) formatCol[c] = 'moeda';
+
   renderTable('thDet', 'tbDet', COLS_DET, LABELS_DET, rows, {
     sortable: true, sortCol: _sortCol, sortDir: _sortDir,
-    formatCol: { valorTotal: 'moeda', qtdMarmitas: 'centro', qtdLanches: 'centro' },
+    formatCol,
     onSort: (col) => {
       if (_sortCol === col) _sortDir = _sortDir === 'asc' ? 'desc' : 'asc';
       else { _sortCol = col; _sortDir = 'asc'; }
@@ -239,53 +255,112 @@ function renderTabelaDetalhamento() {
     },
   });
 
-  // Linha de Totais (Lote 30) — igual ao "Totais" do Qlik Sense da Tereza:
-  // primeira linha da tabela, soma de Marmitas/Lanches/Valor de TODO o
-  // período (não só das linhas visíveis após ordenar — o total não muda
-  // quando você só reordena a tabela).
+  // Linha de Totais (Lote 30/31) — igual ao "Totais" do relatório do Qlik
+  // Sense da Tereza: primeira linha da tabela, soma de TODO o período (não
+  // só das linhas visíveis após ordenar). Réplica fiel do relatório
+  // original: Qtd. Marmitas/Qtd. Lanches, OBS e Data pagamento ficam em
+  // branco na linha de Totais (é assim que sai no Qlik), só as colunas de
+  // valor somam.
   const tbody = document.getElementById('tbDet');
   if (tbody && _detalhamentoAtual.length) {
     const t = totaisDetalhamento();
     const totalRow = document.createElement('tr');
     totalRow.className = 'row-total';
     totalRow.innerHTML =
-      `<td class="bold">Totais</td><td></td><td></td>` +
-      `<td class="tc bold">${t.marmitas}</td><td class="tc bold">${t.lanches}</td>` +
-      `<td class="tr bold">${fmt(t.valor)}</td><td></td>`;
+      `<td class="bold">Totais</td><td></td><td></td><td></td>` +
+      COLS_DET_MOEDA.map((c) => `<td class="tr bold">${fmt(t[c])}</td>`).join('') +
+      `<td></td><td></td>`;
     tbody.insertBefore(totalRow, tbody.firstChild);
   }
 
   document.getElementById('btnExportarDet')?.addEventListener('click', exportarDetalhamentoExcel);
 }
 
-// Excel do Detalhamento (Lote 30) — pra Tereza mandar pro tesoureiro da
+// Excel do Detalhamento (Lote 30/31) — pra Tereza mandar pro tesoureiro da
 // escola conferir e pagar (mesmo fluxo que já existia no painel Next.js
-// antigo, Lote 10). Só entram pedidos de ESCOLA (buscarDetalhamentoEscola já
-// garante isso) e a linha de Totais vai junto, igual à tabela na tela.
-function exportarDetalhamentoExcel() {
-  if (typeof XLSX === 'undefined') {
+// antigo, Lote 10), com as mesmas colunas e ordem do relatório do Qlik
+// Sense. Só entram pedidos de ESCOLA (buscarDetalhamentoEscola já garante
+// isso) e a linha de Totais vai junto, igual à tabela na tela.
+//
+// Usa ExcelJS (não SheetJS/xlsx) porque precisamos colorir a célula de OBS
+// quando preenchida — a versão gratuita do SheetJS não aplica estilo de
+// célula (cor de fundo), só o ExcelJS faz isso no navegador sem backend.
+const COR_CABECALHO = 'FFEAD9BE';   // --brd (bege) — mesma paleta do site
+const COR_TOTAL = 'FFFBF6EA';       // --surf
+const COR_OBS_DESTAQUE = 'FFFFF176'; // amarelo, igual ao Qlik
+
+async function exportarDetalhamentoExcel() {
+  if (typeof ExcelJS === 'undefined') {
     alert('Não consegui carregar a biblioteca de Excel — verifique sua internet e tente de novo.');
     return;
   }
-  const cabecalho = ['Data', 'Origem', 'Quem', 'Marmitas', 'Lanches', 'Valor', 'Obs.'];
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Detalhamento');
+
+  ws.columns = [
+    { header: 'Ano/Mês', key: 'anoMes', width: 11 },
+    { header: 'Data entrega', key: 'data', width: 13 },
+    { header: 'Qtd. Marmitas', key: 'qtdMarmitas', width: 13 },
+    { header: 'Qtd. Lanches', key: 'qtdLanches', width: 12 },
+    { header: 'Lanches (unit.)', key: 'valorUnitLanche', width: 13 },
+    { header: 'Marmitas (unit.)', key: 'valorUnitMarmita', width: 14 },
+    { header: 'Valor Total Lanches', key: 'valorTotalLanches', width: 16 },
+    { header: 'Valor Total Marmitas', key: 'valorTotalMarmitas', width: 17 },
+    { header: 'Valor a ser pago', key: 'valorASerPago', width: 14 },
+    { header: 'Valor pago', key: 'valorPago', width: 13 },
+    { header: 'OBS', key: 'obs', width: 32 },
+    { header: 'Data pagamento', key: 'dataPagamento', width: 14 },
+  ];
+
+  const headerRow = ws.getRow(1);
+  headerRow.font = { bold: true };
+  headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_CABECALHO } };
+  headerRow.alignment = { vertical: 'middle' };
+
   const t = totaisDetalhamento();
-  const linhaTotais = ['Totais', '', '', t.marmitas, t.lanches, t.valor, ''];
-  const linhas = _detalhamentoAtual.map((r) => [r.data, r.origem, r.quem, r.qtdMarmitas, r.qtdLanches, r.valorTotal, r.obs || '']);
+  const linhaTotais = ws.addRow({ anoMes: 'Totais', ...t });
+  linhaTotais.font = { bold: true };
+  linhaTotais.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_TOTAL } };
 
-  const ws = XLSX.utils.aoa_to_sheet([cabecalho, linhaTotais, ...linhas]);
-  ws['!cols'] = [{ wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 13 }, { wch: 32 }];
-
-  // Formata a coluna Valor (índice 5) como moeda BRL nas linhas de dado.
-  const ref = XLSX.utils.decode_range(ws['!ref']);
-  for (let linha = 1; linha <= ref.e.r; linha++) {
-    const cel = ws[XLSX.utils.encode_cell({ r: linha, c: 5 })];
-    if (cel && typeof cel.v === 'number') cel.z = '"R$" #,##0.00';
+  for (const r of _detalhamentoAtual) {
+    const linha = ws.addRow({
+      anoMes: r.anoMes || '-',
+      data: fmtData(r.data),
+      qtdMarmitas: r.qtdMarmitas || '-',
+      qtdLanches: r.qtdLanches || '-',
+      valorUnitLanche: r.valorUnitLanche,
+      valorUnitMarmita: r.valorUnitMarmita,
+      valorTotalLanches: r.valorTotalLanches,
+      valorTotalMarmitas: r.valorTotalMarmitas,
+      valorASerPago: r.valorASerPago,
+      valorPago: r.valorPago,
+      obs: r.obs || '-',
+      dataPagamento: fmtData(r.dataPagamento),
+    });
+    if (r.obs) {
+      linha.getCell('obs').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: COR_OBS_DESTAQUE } };
+    }
   }
 
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Detalhamento');
+  for (const key of COLS_DET_MOEDA) {
+    ws.getColumn(key).numFmt = '"R$" #,##0.00';
+    ws.getColumn(key).alignment = { horizontal: 'right' };
+  }
+  ws.getColumn('qtdMarmitas').alignment = { horizontal: 'center' };
+  ws.getColumn('qtdLanches').alignment = { horizontal: 'center' };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
   const rotuloPeriodo = _mesSelecionado ? nomeMesAno(_mesSelecionado) : 'Todos os periodos';
-  XLSX.writeFile(wb, `Detalhamento Escola - ${rotuloPeriodo}.xlsx`);
+  a.href = url;
+  a.download = `Detalhamento Escola - ${rotuloPeriodo}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 const LABELS_GAS = { data: 'Data', pessoaLocal: 'Pessoa/local', tipoPagamento: 'Pagamento', valor: 'Valor' };
