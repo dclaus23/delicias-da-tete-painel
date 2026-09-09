@@ -10,9 +10,12 @@ import {
 let _resultados = [];
 let _mesSelecionado = '';   // '' = Todos os períodos
 let _contexto = 'TODOS';
+let _arquivo = '';          // '' = Todos os arquivos do período (Lote 34)
 let _sortCol = null;
 let _sortDir = 'asc';
-let _detalhamentoAtual = [];
+let _detalhamentoTodos = []; // Detalhamento do período, sem filtrar por arquivo
+let _gastosTodos = [];       // Gastos do período, sem filtrar por arquivo
+let _detalhamentoAtual = []; // após aplicar o filtro de Arquivo — o que a tabela/Excel usam
 let _gastosAtual = [];
 
 // valores de um ResultadoMensal já reduzidos pro contexto selecionado
@@ -73,6 +76,7 @@ function buildPeriodoSelect() {
   sel.value = _mesSelecionado;
   sel.onchange = async () => {
     _mesSelecionado = sel.value;
+    _arquivo = ''; // mudou de período -> a lista de arquivos é outra, limpa a seleção anterior
     killCharts();
     await render();
   };
@@ -86,6 +90,54 @@ function buildContextoSelect() {
     killCharts();
     await render();
   };
+}
+
+// Filtro "Arquivo" (Lote 34) — o David pediu depois de precisar caçar na mão
+// em qual arquivo estava um valor divergente do Qlik. Só aparece quando um
+// período específico está selecionado (é quando as tabelas de Detalhamento/
+// Gastos existem) e lista só os arquivos que realmente aparecem nesse
+// período — normalmente 1, mas pode ter mais de um (ex: arquivo principal +
+// "Prestadores" do mesmo mês).
+function buildArquivoSelect() {
+  const lbl = document.getElementById('lblArquivo');
+  const sel = document.getElementById('selArquivo');
+  const arquivos = Array.from(new Set(
+    [..._detalhamentoTodos, ..._gastosTodos].map((r) => r.arquivo).filter(Boolean)
+  )).sort();
+
+  if (!arquivos.length) {
+    lbl.style.display = 'none';
+    sel.style.display = 'none';
+    sel.innerHTML = '';
+    _arquivo = '';
+    return;
+  }
+
+  if (!arquivos.includes(_arquivo)) _arquivo = '';
+  lbl.style.display = '';
+  sel.style.display = '';
+  sel.innerHTML = ['<option value="">Todos os arquivos</option>']
+    .concat(arquivos.map((a) => `<option value="${a}">${a}</option>`))
+    .join('');
+  sel.value = _arquivo;
+  sel.onchange = () => {
+    _arquivo = sel.value;
+    aplicarFiltroArquivo();
+    renderTabelaDetalhamento();
+    renderTabelaGastos();
+  };
+}
+
+function esconderArquivoSelect() {
+  const lbl = document.getElementById('lblArquivo');
+  const sel = document.getElementById('selArquivo');
+  if (lbl) lbl.style.display = 'none';
+  if (sel) sel.style.display = 'none';
+}
+
+function aplicarFiltroArquivo() {
+  _detalhamentoAtual = _arquivo ? _detalhamentoTodos.filter((r) => r.arquivo === _arquivo) : _detalhamentoTodos;
+  _gastosAtual = _arquivo ? _gastosTodos.filter((r) => r.arquivo === _arquivo) : _gastosTodos;
 }
 
 async function render() {
@@ -185,10 +237,14 @@ async function render() {
       buscarDetalhamentoEscola(_mesSelecionado),
       buscarGastosDetalhado(_mesSelecionado, _contexto),
     ]);
-    _detalhamentoAtual = det;
-    _gastosAtual = gas;
+    _detalhamentoTodos = det;
+    _gastosTodos = gas;
+    buildArquivoSelect();
+    aplicarFiltroArquivo();
     renderTabelaDetalhamento();
     renderTabelaGastos();
+  } else {
+    esconderArquivoSelect();
   }
 }
 

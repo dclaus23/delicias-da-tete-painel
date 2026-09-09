@@ -149,6 +149,10 @@ export async function buscarDetalhamentoEscola(mes) {
       valorPago: valorASerPago,
       obs: l.obs,
       dataPagamento: null,
+      // Lote 34 (2026-09-09): nome do arquivo de origem, pra alimentar o
+      // filtro "Arquivo" da Visão geral — o David pediu depois de precisar
+      // caçar na mão em qual arquivo estava um valor divergente do Qlik.
+      arquivo: l.arquivo_origem ?? null,
     });
   }
   return linhas.sort((a, b) => (b.data ?? '').localeCompare(a.data ?? ''));
@@ -179,6 +183,8 @@ export async function buscarGastosDetalhado(mes, contexto) {
       tipoPagamento: l.tipo_pagamento ?? '—',
       valor: num(l.valor),
       destaque: NOMES_COLABORADORES.includes(pessoa),
+      // Lote 34: idem Detalhamento — nome do arquivo pro filtro "Arquivo".
+      arquivo: l.arquivo_origem ?? null,
     });
   }
   return linhas.sort((a, b) => (b.data ?? '').localeCompare(a.data ?? ''));
