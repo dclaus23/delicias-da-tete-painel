@@ -57,12 +57,13 @@
   </header>
 
   <nav class="pages">
-    <button class="pg active">📊 Visão geral</button>
-    <button class="pg disabled" title="Em breve">🍱 Avulsas</button>
+    <button class="pg active" data-page="visao-geral">📊 Visão geral</button>
+    <button class="pg" data-page="avulsas">🍱 Avulsas</button>
     <button class="pg disabled" title="Em breve">💬 Cobrança</button>
   </nav>
 
-  <div class="pbar">
+  <!-- Filtros da Visão geral -->
+  <div class="pbar" id="pbarVG">
     <span class="plbl">Período</span>
     <select class="pfsel" id="selPeriodo"></select>
     <span class="plbl">Contexto</span>
@@ -75,8 +76,17 @@
     <select class="pfsel" id="selArquivo" style="display:none"></select>
   </div>
 
+  <!-- Filtros da página Avulsas (Lote 46) -->
+  <div class="pbar" id="pbarAV" style="display:none">
+    <span class="plbl">Período</span>
+    <select class="pfsel" id="selPeriodoAV"></select>
+    <span class="plbl">Tipo</span>
+    <select class="pfsel" id="selTipoAV"></select>
+  </div>
+
   <main class="main">
     <div id="vg"></div>
+    <div id="av" style="display:none"></div>
   </main>
 </div>
 

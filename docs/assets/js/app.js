@@ -1,5 +1,7 @@
 import { sb } from './supabase-client.js';
 import { boot as bootVisaoGeral } from './visao-geral.js';
+import { boot as bootAvulsas } from './avulsas.js';
+import { buscarUltimaSincronizacao } from './dados.js';
 
 async function boot() {
   setDot('spin', 'Verificando sessão...');
@@ -16,15 +18,53 @@ function showLogin() {
 async function afterLogin() {
   document.getElementById('loginModal').style.display = 'none';
   document.getElementById('appShell').style.display = 'block';
+  buscarUltimaSincronizacao().then((quando) => {
+    const badge = document.getElementById('syncBadge');
+    if (badge && quando) {
+      const d = new Date(quando);
+      badge.textContent = `última sincronização: ${d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
+    }
+  });
+  await abrirPagina(paginaDaUrl());
+}
+
+// ─── Navegação entre páginas (Lote 46) ──────────────────────────────────────
+// Cada página carrega seus dados só na primeira vez que é aberta. A página
+// atual fica no "#" da URL (ex.: .../#avulsas), então um F5 volta pra ela.
+const PAGINAS = {
+  'visao-geral': { conteudo: 'vg', filtros: 'pbarVG', boot: bootVisaoGeral },
+  avulsas: { conteudo: 'av', filtros: 'pbarAV', boot: bootAvulsas },
+};
+const _iniciadas = new Set();
+
+function paginaDaUrl() {
+  const h = location.hash.replace('#', '');
+  return PAGINAS[h] ? h : 'visao-geral';
+}
+
+async function abrirPagina(id) {
+  for (const [pid, p] of Object.entries(PAGINAS)) {
+    const ativa = pid === id;
+    document.getElementById(p.conteudo).style.display = ativa ? '' : 'none';
+    document.getElementById(p.filtros).style.display = ativa ? '' : 'none';
+  }
+  document.querySelectorAll('.pg[data-page]').forEach((b) => b.classList.toggle('active', b.dataset.page === id));
+  if (location.hash.replace('#', '') !== id) history.replaceState(null, '', '#' + id);
+  if (_iniciadas.has(id)) return;
   setDot('spin', 'Carregando...');
   try {
-    await bootVisaoGeral();
+    await PAGINAS[id].boot();
+    _iniciadas.add(id);
     setDot('ok', 'Atualizado');
   } catch (err) {
     setDot('err', 'Erro ao carregar — veja o console');
     console.error(err);
   }
 }
+
+document.querySelectorAll('.pg[data-page]').forEach((b) => {
+  b.addEventListener('click', () => abrirPagina(b.dataset.page));
+});
 
 document.getElementById('loginForm')?.addEventListener('submit', async (e) => {
   e.preventDefault();
