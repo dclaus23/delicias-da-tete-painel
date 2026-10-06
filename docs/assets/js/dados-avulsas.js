@@ -68,6 +68,22 @@ export async function buscarPedidosAvulsos() {
   return pedidos;
 }
 
+// Soma dos Lançamentos Pix (extrato PicPay, arquivos de 03.Avulsas\03.Pagamentos)
+// por mês do nome do arquivo — usado só pra conferir o KPI "Total conta"
+// (Lote 47): soma do "Valor pago" dos pedidos, incluindo saques, tem que
+// bater com o total do extrato do mês.
+export async function buscarPixPorMes() {
+  const linhas = await buscarTodasPaginado((inicio, fim) =>
+    sb.from('lancamentos_pix').select('valor, arquivo_origem', { count: 'exact' })
+      .order('id', { ascending: true }).range(inicio, fim));
+  const m = new Map();
+  for (const l of linhas) {
+    const mes = mesDoArquivo(l.arquivo_origem);
+    if (mes) m.set(mes, (m.get(mes) ?? 0) + num(l.valor));
+  }
+  return m;
+}
+
 // ─── Agregações ─────────────────────────────────────────────────────────────
 
 const ORDEM_TIPOS = ['AVULSAS', 'CAJ', 'BAIRRO', 'EXTRA', 'CASA', 'CENE', 'BARRA'];

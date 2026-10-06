@@ -1,7 +1,7 @@
 // Página "Avulsas" (Lote 46, 2026-10-05) — pedidos avulsos (arquivos de
 // 03.Avulsas). Regras de negócio comentadas em dados-avulsas.js.
 import {
-  buscarPedidosAvulsos, ehMovimentacao, MOVIMENTACOES, ordenarTipos, somaPorTipo,
+  buscarPedidosAvulsos, buscarPixPorMes, ehMovimentacao, MOVIMENTACOES, ordenarTipos, somaPorTipo,
   rankClientes, rankProdutos, rankDiasSemana, rankPagadores,
 } from './dados-avulsas.js';
 import {
@@ -18,6 +18,7 @@ let _sortCol = 'data';
 let _sortDir = 'desc';
 const _topN = { clientes: 5, produtos: 5, pagadores: 5 };
 let _carregado = false;
+let _pixPorMes = new Map(); // total dos Lançamentos Pix por mês (conferência do Total conta)
 
 // Cores por tipo (KPI) — mesma paleta da marca, ordem fixa por tipo, pra
 // AVULSAS ser sempre dourado, CAJ sempre petróleo etc. (cor segue o tipo,
@@ -33,7 +34,12 @@ export async function boot() {
   if (_carregado) return;
   const el = document.getElementById('av');
   el.innerHTML = `<div style="padding:60px;text-align:center"><div class="spinner"></div></div>`;
-  _todos = await buscarPedidosAvulsos();
+  const [pedidos, pix] = await Promise.all([
+    buscarPedidosAvulsos(),
+    buscarPixPorMes().catch((e) => { console.warn('Lançamentos Pix indisponíveis', e); return new Map(); }),
+  ]);
+  _todos = pedidos;
+  _pixPorMes = pix;
   _meses = Array.from(new Set(_todos.map((p) => p.mes))).sort();
   if (!_todos.length) {
     el.innerHTML = `<div class="center-state"><div class="ico">📂</div><h2>Nenhum pedido avulso sincronizado ainda</h2></div>`;
@@ -141,12 +147,7 @@ function kpisHTML(atual, anterior) {
     }));
   }
 
-  // 2) Total vendido (sem movimentações)
-  const totalA = tiposVenda.reduce((s, t) => s + (somaA.get(t) ?? 0), 0);
-  const totalB = tiposVenda.reduce((s, t) => s + (somaB.get(t) ?? 0), 0);
-  const movA = Object.keys(MOVIMENTACOES).reduce((s, t) => s + (somaA.get(t) ?? 0), 0);
-
-  // 3) Saques (valor líquido do tipo SAQUE — negativo = saiu da conta).
+  // 2) Saques (valor líquido do tipo SAQUE — negativo = saiu da conta).
   // Comparação pelo tamanho do saque (valor absoluto): sacar mais = vermelho.
   const saqueA = somaA.get('SAQUE') ?? 0;
   const saqueB = somaB.get('SAQUE') ?? 0;
@@ -166,15 +167,7 @@ function kpisHTML(atual, anterior) {
     }
   }
 
-  if (!ehMovimentacao(_tipo)) {
-    cards.push(kpiHTML({
-      label: 'Total vendido', valor: fmt(totalA), acc: 'var(--sucesso)',
-      comp: comp(totalA, totalB),
-      sub: mostraMov && movA ? `após saques/depósitos: ${fmt(totalA + movA)}` : null,
-    }));
-  }
-
-  // 4) Falta pagar (Valor pago vazio) — período selecionado + em aberto em todos os meses
+  // 3) Falta pagar (Valor pago vazio) — período selecionado + em aberto em todos os meses
   const pend = atual.filter((p) => !p.pago && !ehMovimentacao(p.tipo));
   const pendVal = pend.reduce((s, p) => s + p.valorComTaxa, 0);
   const pendGeral = _todos.filter(doTipo).filter((p) => !p.pago && !ehMovimentacao(p.tipo));
@@ -183,6 +176,34 @@ function kpisHTML(atual, anterior) {
     label: 'Falta pagar', valor: fmt(pendVal), acc: 'var(--alerta)',
     sub: `${pend.length} pedido${pend.length === 1 ? '' : 's'} pendente${pend.length === 1 ? '' : 's'}` +
       (_mes && pendGeralVal !== pendVal ? ` · em todos os meses: ${fmt(pendGeralVal)}` : ''),
+  }));
+
+  // 4) Total conta (Lote 47, pedido do David) — por último. É o que de fato
+  // entrou/saiu da conta PicPay: soma do "Valor pago" de todas as linhas,
+  // INCLUINDO saques/depósitos. Pedido pendente (Valor pago vazio) não entra.
+  // Tem que bater com o total do arquivo de Lançamentos Pix do mês
+  // (03.Avulsas\03.Pagamentos) — a conferência aparece embaixo do valor.
+  const pagoA = atual.reduce((s, p) => s + (p.valorPago ?? 0), 0);
+  const pagoB = anterior ? anterior.reduce((s, p) => s + (p.valorPago ?? 0), 0) : 0;
+  const recebidoA = atual.filter((p) => !ehMovimentacao(p.tipo)).reduce((s, p) => s + (p.valorPago ?? 0), 0);
+  const movPagoA = pagoA - recebidoA;
+  const partes = [];
+  if (mostraMov && movPagoA) partes.push(`recebido ${fmt(recebidoA)} · saques ${fmt(movPagoA)}`);
+  if (_tipo === 'TODOS') {
+    const mesesConf = _mes ? [_mes] : _meses;
+    const temPix = mesesConf.some((m) => _pixPorMes.has(m));
+    if (temPix) {
+      const pix = mesesConf.reduce((s, m) => s + (_pixPorMes.get(m) ?? 0), 0);
+      const bate = Math.abs(pix - pagoA) < 0.01;
+      partes.push(bate
+        ? `<span class="conf-ok">✓ bate com os Lançamentos Pix</span>`
+        : `<span class="conf-dif">⚠ Lançamentos Pix: ${fmt(pix)} (diferença ${fmt(pagoA - pix)})</span>`);
+    }
+  }
+  cards.push(kpiHTML({
+    label: 'Total conta', valor: fmt(pagoA), acc: 'var(--sucesso)',
+    comp: comp(pagoA, pagoB),
+    sub: partes.join('<br>') || null,
   }));
 
   return cards.join('');

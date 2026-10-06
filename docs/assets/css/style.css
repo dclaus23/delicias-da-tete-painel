@@ -242,3 +242,5 @@ th.th-sort.active { color: var(--dourado); }
 .st-mov { background: #F2E6EA; color: var(--vinho); }
 .tipo-tag { font-size: 10px; font-weight: 700; color: var(--t2); background: var(--surf); border: 1px solid var(--brd); border-radius: 6px; padding: 1px 6px; }
 tr.row-pend td { background: #FFF8F6; }
+.conf-ok { color: var(--sucesso); font-weight: 700; }
+.conf-dif { color: var(--alerta); font-weight: 700; }
