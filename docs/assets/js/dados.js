@@ -225,6 +225,39 @@ export async function buscarGastosDetalhado(mes, contexto) {
   return linhas.sort((a, b) => (b.data ?? '').localeCompare(a.data ?? ''));
 }
 
+// Indicadores de gastos da Visão geral (Lote 48, 2026-10-07) — substituem os
+// gráficos de barras mensais. Linha a linha do período (ou de todo o
+// histórico em "Todos os períodos" — a tabela gastos tem só ~1.300 linhas,
+// leve o bastante) com Fornecedor/Pessoa, Categoria e Data, já filtrada
+// pelo Contexto (mesmo critério de sempre: TIPO pelo nome do arquivo).
+export async function buscarGastosIndicadores(mes, contexto) {
+  const prefixo = mes ? anoMesCompacto(mes) : null;
+  const [data, mapaContextoEscola] = await Promise.all([
+    buscarTodasPaginado((inicio, fim) => {
+      let q = sb.from('gastos').select('data, pessoa_local, categoria, valor, arquivo_origem', { count: 'exact' }).order('id', { ascending: true });
+      if (prefixo) q = q.ilike('arquivo_origem', `${prefixo}_%`);
+      return q.range(inicio, fim);
+    }),
+    buscarMapaContextoEscolaPorNome(),
+  ]);
+  const linhas = [];
+  for (const l of data) {
+    if (!mesDoArquivo(l.arquivo_origem)) continue;
+    const token = contextoDoArquivo(l.arquivo_origem);
+    const ehEscola = token ? mapaContextoEscola.get(token) : undefined;
+    if (contexto === 'ESCOLA' && ehEscola !== true) continue;
+    if (contexto === 'AVULSOS' && ehEscola !== false) continue;
+    linhas.push({
+      data: l.data,
+      fornecedor: (l.pessoa_local ?? '').trim() || '(sem fornecedor)',
+      categoria: (l.categoria ?? '').trim() || '(sem categoria)',
+      valor: num(l.valor),
+      arquivo: l.arquivo_origem ?? null,
+    });
+  }
+  return linhas;
+}
+
 export async function buscarUltimaSincronizacao() {
   const { data, error } = await sb.from('sync_log').select('executado_em').order('executado_em', { ascending: false }).limit(1).maybeSingle();
   if (error) return null;

@@ -1,6 +1,6 @@
 import {
   buscarResultadosMensais, buscarDiasTrabalhados, buscarDetalhamentoEscola,
-  buscarGastosDetalhado, buscarUltimaSincronizacao,
+  buscarGastosDetalhado, buscarUltimaSincronizacao, buscarGastosIndicadores,
 } from './dados.js';
 import {
   fmt, fmtPct, num, mkC, killCharts, barOpts, kpiHTML, renderTable,
@@ -216,12 +216,8 @@ async function render() {
   </div>
 
   <div class="sec">
-    <div class="sec-title">Faturamento, gastos e lucro por mês</div>
-    <div class="cg3">
-      <div class="cc"><h3>Faturamento</h3><div class="ch"><canvas id="chFat"></canvas></div></div>
-      <div class="cc"><h3>Gastos</h3><div class="ch"><canvas id="chGas"></canvas></div></div>
-      <div class="cc"><h3>Lucro</h3><div class="ch"><canvas id="chLuc"></canvas></div></div>
-    </div>
+    <div class="sec-title">Indicadores de gastos</div>
+    <div class="rg rg4" id="gastosInd"><div class="cc" style="grid-column:1/-1;padding:40px"><div class="spinner"></div></div></div>
   </div>
 
   ${todosOsPeriodos ? `
@@ -251,7 +247,7 @@ async function render() {
   </div>`}
   `;
 
-  renderGraficos(todosOsPeriodos);
+  renderIndicadoresGastos();
 
   if (!todosOsPeriodos) {
     const [det, gas] = await Promise.all([
@@ -266,20 +262,106 @@ async function render() {
   }
 }
 
-function renderGraficos(todosOsPeriodos) {
-  let serie = _resultados;
-  if (!todosOsPeriodos) {
-    const ano = _mesSelecionado.slice(0, 4);
-    serie = _resultados.filter((r) => r.mes.startsWith(ano));
-  }
-  const labels = serie.map((r) => (todosOsPeriodos ? anoMesBarra(r.mes) : nomeMesCurto(r.mes)));
-  const fats = serie.map((r) => Math.round(reduzirContexto(r, _contexto).faturamento));
-  const gass = serie.map((r) => Math.round(reduzirContexto(r, _contexto).gastos));
-  const lucs = serie.map((r, i) => fats[i] - gass[i]);
+// ─── Indicadores de gastos (Lote 48, 2026-10-07) ────────────────────────────
+// Pedido do David: tirar os 3 gráficos de barras (Faturamento/Gastos/Lucro
+// por mês) e colocar no lugar indicadores de gastos — onde mais gasta
+// (Fornecedor / Pessoa), dia da semana que mais gasta, categoria mais usada
+// (nº de lançamentos) e categoria que mais consome (R$). Respeitam Período,
+// Contexto e Arquivo, igual aos KPIs.
+const _topGastos = { onde: 5, catUso: 5, catValor: 5 };
+const DIAS_SEMANA = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+let _gastosInd = [];
 
-  mkC('chFat', { type: 'bar', data: { labels, datasets: [{ data: fats, backgroundColor: '#E3A63E', borderRadius: 6 }] }, options: barOpts() });
-  mkC('chGas', { type: 'bar', data: { labels, datasets: [{ data: gass, backgroundColor: '#B5651D', borderRadius: 6 }] }, options: barOpts() });
-  mkC('chLuc', { type: 'bar', data: { labels, datasets: [{ data: lucs, backgroundColor: '#3C8558', borderRadius: 6 }] }, options: barOpts() });
+function chaveTxt(s) {
+  return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+function agruparGastos(linhas, campo) {
+  const m = new Map();
+  for (const l of linhas) {
+    const k = chaveTxt(l[campo]);
+    if (!m.has(k)) m.set(k, { nome: l[campo], valor: 0, qtd: 0 });
+    const g = m.get(k); g.valor += l.valor; g.qtd += 1;
+  }
+  return Array.from(m.values());
+}
+
+async function renderIndicadoresGastos() {
+  const alvo = document.getElementById('gastosInd');
+  if (!alvo) return;
+  try {
+    const todas = await buscarGastosIndicadores(_mesSelecionado, _contexto);
+    _gastosInd = _arquivo ? todas.filter((l) => l.arquivo === _arquivo) : todas;
+  } catch (e) {
+    console.error(e);
+    alvo.innerHTML = `<div class="cc" style="grid-column:1/-1"><p class="rk-vazio">Não consegui carregar os gastos.</p></div>`;
+    return;
+  }
+  const linhas = _gastosInd.filter((l) => l.valor > 0);
+  const total = linhas.reduce((s, l) => s + l.valor, 0);
+
+  const dias = DIAS_SEMANA.map((nome) => ({ nome, valor: 0, qtd: 0 }));
+  for (const l of linhas) {
+    if (!l.data) continue;
+    const [a, m, d] = l.data.split('-').map(Number);
+    const g = dias[new Date(a, m - 1, d).getDay()];
+    g.valor += l.valor; g.qtd += 1;
+  }
+
+  const listas = {
+    onde: agruparGastos(linhas, 'fornecedor').sort((a, b) => b.valor - a.valor),
+    semana: dias.filter((d) => d.qtd).sort((a, b) => b.valor - a.valor),
+    catUso: agruparGastos(linhas, 'categoria').sort((a, b) => b.qtd - a.qtd || b.valor - a.valor),
+    catValor: agruparGastos(linhas, 'categoria').sort((a, b) => b.valor - a.valor),
+  };
+  const cards = [
+    ['onde', '🛒 Onde mais gasta', 'valor'],
+    ['semana', '📅 Dia da semana que mais gasta', 'valor'],
+    ['catUso', '🏷️ Categoria mais usada', 'qtd'],
+    ['catValor', '💸 Categoria que mais consome', 'valor'],
+  ];
+  alvo.innerHTML = cards.map(([id, titulo]) => `
+    <div class="cc rk">
+      <div class="rk-hd">
+        <h3>${titulo}</h3>
+        ${id !== 'semana' ? `<div class="chips" data-rank="${id}">${[5, 10, 15].map((n) =>
+          `<button type="button" class="chip${_topGastos[id] === n ? ' on' : ''}" data-n="${n}">Top ${n}</button>`).join('')}</div>` : ''}
+      </div>
+      <div id="gi-${id}"></div>
+    </div>`).join('');
+
+  const desenhar = (id, medida) => {
+    const el = document.getElementById(`gi-${id}`);
+    const arr = id === 'semana' ? listas.semana : listas[id].slice(0, _topGastos[id]);
+    if (!arr.length) { el.innerHTML = `<p class="rk-vazio">Sem gastos no período</p>`; return; }
+    const max = Math.max(...arr.map((r) => r[medida]), 1);
+    el.innerHTML = `<ol class="rk-list">${arr.map((r, i) => {
+      const pct = total ? (r.valor / total) * 100 : 0;
+      const valorTxt = medida === 'qtd' ? `${r.qtd} lanç.` : fmt(r.valor);
+      const det = medida === 'qtd'
+        ? `${fmt(r.valor)} · ${pct.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% do gasto`
+        : `${r.qtd} lançamento${r.qtd === 1 ? '' : 's'} · ${pct.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% do gasto`;
+      return `<li>
+        <span class="rk-pos">${i + 1}</span>
+        <div class="rk-body">
+          <div class="rk-top"><span class="rk-nome" title="${r.nome}">${r.nome}</span><span class="rk-val">${valorTxt}</span></div>
+          <div class="rk-bar"><span style="width:${Math.max(2, (r[medida] / max) * 100)}%;background:var(--terracota)"></span></div>
+          <div class="rk-det">${det}</div>
+        </div>
+      </li>`;
+    }).join('')}</ol>`;
+  };
+  cards.forEach(([id, , medida]) => desenhar(id, medida));
+
+  alvo.querySelectorAll('.chips').forEach((grp) => {
+    grp.addEventListener('click', (e) => {
+      const b = e.target.closest('.chip');
+      if (!b) return;
+      const id = grp.dataset.rank;
+      _topGastos[id] = Number(b.dataset.n);
+      grp.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c === b));
+      desenhar(id, cards.find((c) => c[0] === id)[2]);
+    });
+  });
 }
 
 // Colunas replicadas 1:1 do relatório "Detalhamento | Entregas" que a

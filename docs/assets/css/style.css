@@ -244,3 +244,5 @@ th.th-sort.active { color: var(--dourado); }
 tr.row-pend td { background: #FFF8F6; }
 .conf-ok { color: var(--sucesso); font-weight: 700; }
 .conf-dif { color: var(--alerta); font-weight: 700; }
+/* Indicadores de gastos da Visão geral (Lote 48) — 4 cards lado a lado no desktop */
+.rg.rg4 { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
