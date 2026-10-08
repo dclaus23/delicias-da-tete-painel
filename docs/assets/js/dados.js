@@ -234,12 +234,21 @@ export async function buscarGastosIndicadores(mes, contexto) {
   const prefixo = mes ? anoMesCompacto(mes) : null;
   const [data, mapaContextoEscola] = await Promise.all([
     buscarTodasPaginado((inicio, fim) => {
-      let q = sb.from('gastos').select('data, pessoa_local, categoria, valor, arquivo_origem', { count: 'exact' }).order('id', { ascending: true });
+      let q = sb.from('gastos').select('nf, data, pessoa_local, categoria, valor, arquivo_origem, linha_origem', { count: 'exact' }).order('id', { ascending: true });
       if (prefixo) q = q.ilike('arquivo_origem', `${prefixo}_%`);
       return q.range(inicio, fim);
     }),
     buscarMapaContextoEscolaPorNome(),
   ]);
+  // Chave de COMPRA (Lote 49): uma nota compartilhada é lançada nos DOIS
+  // arquivos (ESCOLA e AVULSAS) com metade do valor cada — mesmo NF, mesma
+  // data, mesmo valor. A chave junta essas duas metades numa compra só pra
+  // contagem. O "NF" da planilha não é número de nota único (é
+  // "<serial da data>-<fornecedor>", e "Vanessa" se repete todo mês), por
+  // isso a chave usa NF + data + valor + n-ésima ocorrência dentro do
+  // arquivo (duas compras idênticas no mesmo dia continuam sendo duas).
+  data.sort((a, b) => (a.arquivo_origem ?? '').localeCompare(b.arquivo_origem ?? '') || (a.linha_origem ?? 0) - (b.linha_origem ?? 0));
+  const ocorrencias = new Map();
   const linhas = [];
   for (const l of data) {
     if (!mesDoArquivo(l.arquivo_origem)) continue;
@@ -247,7 +256,12 @@ export async function buscarGastosIndicadores(mes, contexto) {
     const ehEscola = token ? mapaContextoEscola.get(token) : undefined;
     if (contexto === 'ESCOLA' && ehEscola !== true) continue;
     if (contexto === 'AVULSOS' && ehEscola !== false) continue;
+    const base = `${(l.nf ?? '').trim().toLowerCase()}|${l.data ?? ''}|${num(l.valor).toFixed(3)}`;
+    const k = `${l.arquivo_origem}|${base}`;
+    const n = (ocorrencias.get(k) ?? 0) + 1;
+    ocorrencias.set(k, n);
     linhas.push({
+      compra: `${mesDoArquivo(l.arquivo_origem)}|${base}|${n}`,
       data: l.data,
       fornecedor: (l.pessoa_local ?? '').trim() || '(sem fornecedor)',
       categoria: (l.categoria ?? '').trim() || '(sem categoria)',

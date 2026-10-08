@@ -279,10 +279,12 @@ function agruparGastos(linhas, campo) {
   const m = new Map();
   for (const l of linhas) {
     const k = chaveTxt(l[campo]);
-    if (!m.has(k)) m.set(k, { nome: l[campo], valor: 0, qtd: 0 });
-    const g = m.get(k); g.valor += l.valor; g.qtd += 1;
+    if (!m.has(k)) m.set(k, { nome: l[campo], valor: 0, compras: new Set() });
+    const g = m.get(k); g.valor += l.valor; g.compras.add(l.compra);
   }
-  return Array.from(m.values());
+  // qtd = nº de COMPRAS distintas (Lote 49), não de linhas da planilha —
+  // a mesma nota lançada pela metade em ESCOLA e AVULSAS conta 1 vez.
+  return Array.from(m.values()).map((g) => ({ nome: g.nome, valor: g.valor, qtd: g.compras.size }));
 }
 
 async function renderIndicadoresGastos() {
@@ -299,13 +301,14 @@ async function renderIndicadoresGastos() {
   const linhas = _gastosInd.filter((l) => l.valor > 0);
   const total = linhas.reduce((s, l) => s + l.valor, 0);
 
-  const dias = DIAS_SEMANA.map((nome) => ({ nome, valor: 0, qtd: 0 }));
+  const dias = DIAS_SEMANA.map((nome) => ({ nome, valor: 0, compras: new Set() }));
   for (const l of linhas) {
     if (!l.data) continue;
     const [a, m, d] = l.data.split('-').map(Number);
     const g = dias[new Date(a, m - 1, d).getDay()];
-    g.valor += l.valor; g.qtd += 1;
+    g.valor += l.valor; g.compras.add(l.compra);
   }
+  dias.forEach((g) => { g.qtd = g.compras.size; });
 
   const listas = {
     onde: agruparGastos(linhas, 'fornecedor').sort((a, b) => b.valor - a.valor),
@@ -336,10 +339,10 @@ async function renderIndicadoresGastos() {
     const max = Math.max(...arr.map((r) => r[medida]), 1);
     el.innerHTML = `<ol class="rk-list">${arr.map((r, i) => {
       const pct = total ? (r.valor / total) * 100 : 0;
-      const valorTxt = medida === 'qtd' ? `${r.qtd} lanç.` : fmt(r.valor);
+      const valorTxt = medida === 'qtd' ? `${r.qtd} compra${r.qtd === 1 ? '' : 's'}` : fmt(r.valor);
       const det = medida === 'qtd'
         ? `${fmt(r.valor)} · ${pct.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% do gasto`
-        : `${r.qtd} lançamento${r.qtd === 1 ? '' : 's'} · ${pct.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% do gasto`;
+        : `${r.qtd} compra${r.qtd === 1 ? '' : 's'} · ${pct.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}% do gasto`;
       return `<li>
         <span class="rk-pos">${i + 1}</span>
         <div class="rk-body">
