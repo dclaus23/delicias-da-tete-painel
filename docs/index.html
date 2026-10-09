@@ -59,7 +59,7 @@
   <nav class="pages">
     <button class="pg active" data-page="visao-geral">📊 Visão geral</button>
     <button class="pg" data-page="avulsas">🍱 Avulsas</button>
-    <button class="pg disabled" title="Em breve">💬 Cobrança</button>
+    <button class="pg" data-page="cobranca">💬 Cobrança <span class="pg-badge" id="badgeCobranca" hidden></span></button>
   </nav>
 
   <!-- Filtros da Visão geral -->
@@ -84,9 +84,23 @@
     <select class="pfsel" id="selTipoAV"></select>
   </div>
 
+  <!-- Filtros da página Cobrança (Lote 51) -->
+  <div class="pbar" id="pbarCB" style="display:none">
+    <span class="plbl">Mostrar</span>
+    <select class="pfsel" id="selStatusCB">
+      <option value="TODOS">Todos em aberto</option>
+      <option value="ACAO">Só o que pede ação agora</option>
+      <option value="COBRAR">🔴 Para cobrar</option>
+      <option value="CONFERIR">🔎 Conferir Pix</option>
+      <option value="EM_BREVE">🟡 Vence em breve</option>
+      <option value="AGUARDANDO">⚪ Aguardando</option>
+    </select>
+  </div>
+
   <main class="main">
     <div id="vg"></div>
     <div id="av" style="display:none"></div>
+    <div id="cb" style="display:none"></div>
   </main>
 </div>
 

@@ -1,6 +1,7 @@
 import { sb } from './supabase-client.js';
 import { boot as bootVisaoGeral } from './visao-geral.js';
 import { boot as bootAvulsas } from './avulsas.js';
+import { boot as bootCobranca, contarAlertas } from './cobranca.js';
 import { buscarUltimaSincronizacao } from './dados.js';
 
 async function boot() {
@@ -25,6 +26,12 @@ async function afterLogin() {
       badge.textContent = `última sincronização: ${d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}`;
     }
   });
+  // Selo no menu "Cobrança" com quantos clientes pedem ação (cobrar ou
+  // conferir Pix) — aparece em qualquer página, pra ninguém esquecer (Lote 51).
+  contarAlertas().then((n) => {
+    const b = document.getElementById('badgeCobranca');
+    if (b && n > 0) { b.textContent = n; b.hidden = false; }
+  }).catch((e) => console.warn('contagem de cobranças', e));
   await abrirPagina(paginaDaUrl());
 }
 
@@ -34,6 +41,7 @@ async function afterLogin() {
 const PAGINAS = {
   'visao-geral': { conteudo: 'vg', filtros: 'pbarVG', boot: bootVisaoGeral },
   avulsas: { conteudo: 'av', filtros: 'pbarAV', boot: bootAvulsas },
+  cobranca: { conteudo: 'cb', filtros: 'pbarCB', boot: bootCobranca },
 };
 const _iniciadas = new Set();
 
