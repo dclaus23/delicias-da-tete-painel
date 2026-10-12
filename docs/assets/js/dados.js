@@ -272,6 +272,33 @@ export async function buscarGastosIndicadores(mes, contexto) {
   return linhas;
 }
 
+// Entregas da ESCOLA dia a dia (Lote 52, 2026-10-12) — alimenta "Alunos por
+// dia da semana" e o calendário de entregas/feriados da Visão geral.
+// Histórico inteiro de pedidos_escola (~1.500 linhas, colunas enxutas),
+// buscado uma vez e reaproveitado.
+let _entregasEscolaCache = null;
+export function buscarEntregasEscola() {
+  if (!_entregasEscolaCache) {
+    _entregasEscolaCache = buscarTodasPaginado((inicio, fim) =>
+      sb.from('pedidos_escola')
+        .select('data, qtd_marmitas, qtd_lanches, tipo_lancamento, valor_total, arquivo_origem', { count: 'exact' })
+        .order('id', { ascending: true }).range(inicio, fim))
+      .then((linhas) => linhas
+        .filter((l) => l.data && mesDoArquivo(l.arquivo_origem))
+        .map((l) => ({
+          data: l.data,
+          mes: mesDoArquivo(l.arquivo_origem),
+          arquivo: l.arquivo_origem,
+          professores: l.tipo_lancamento === 'PROFESSORES',
+          marmitas: num(l.qtd_marmitas),
+          lanches: num(l.qtd_lanches),
+          valor: num(l.valor_total),
+        })))
+      .catch((e) => { _entregasEscolaCache = null; throw e; });
+  }
+  return _entregasEscolaCache;
+}
+
 export async function buscarUltimaSincronizacao() {
   const { data, error } = await sb.from('sync_log').select('executado_em').order('executado_em', { ascending: false }).limit(1).maybeSingle();
   if (error) return null;

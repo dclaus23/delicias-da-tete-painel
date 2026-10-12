@@ -1,11 +1,12 @@
 import {
   buscarResultadosMensais, buscarDiasTrabalhados, buscarDetalhamentoEscola,
-  buscarGastosDetalhado, buscarUltimaSincronizacao, buscarGastosIndicadores,
+  buscarGastosDetalhado, buscarUltimaSincronizacao, buscarGastosIndicadores, buscarEntregasEscola,
 } from './dados.js';
 import {
   fmt, fmtPct, num, mkC, killCharts, barOpts, kpiHTML, renderTable,
   nomeMesAno, nomeMesCurto, anoMesBarra, mesAnterior, variacaoMoM, fmtData,
 } from './utils.js';
+import { feriadoEm, proximosFeriadosUteis, iso } from './feriados.js';
 
 let _resultados = [];
 let _porArquivo = [];        // Lote 35: [{ arquivo, mes, faturamento, gastos }, ...] de TODO o histórico
@@ -220,6 +221,16 @@ async function render() {
     <div class="rg rg4" id="gastosInd"><div class="cc" style="grid-column:1/-1;padding:40px"><div class="spinner"></div></div></div>
   </div>
 
+  ${_contexto !== 'AVULSOS' ? `
+  <div class="sec">
+    <div class="sec-title">Alunos por dia da semana (Escola)</div>
+    <div id="alunosSemana"><div class="cc" style="padding:40px"><div class="spinner"></div></div></div>
+  </div>
+  <div class="sec">
+    <div class="sec-title">Calendário de entregas e feriados (Escola)</div>
+    <div id="calendarioEsc"><div class="cc" style="padding:40px"><div class="spinner"></div></div></div>
+  </div>` : ''}
+
   ${todosOsPeriodos ? `
   <div class="sec">
     <div class="sec-title">Lançamentos</div>
@@ -248,6 +259,7 @@ async function render() {
   `;
 
   renderIndicadoresGastos();
+  if (_contexto !== 'AVULSOS') renderEscolaSemanaECalendario();
 
   if (!todosOsPeriodos) {
     const [det, gas] = await Promise.all([
@@ -365,6 +377,219 @@ async function renderIndicadoresGastos() {
       desenhar(id, cards.find((c) => c[0] === id)[2]);
     });
   });
+}
+
+// ─── Alunos por dia da semana + calendário (Lote 52, 2026-10-12) ───────────
+// Pedido do David: a quantidade de quentinhas de ALUNOS por dia = nº de
+// alunos almoçando na escola naquele dia (a aba DiasAlmoco da planilha tem
+// esse mesmo número por dia da semana). Aqui sai direto das entregas do
+// mês do arquivo (critério de sempre: período pelo NOME do arquivo), com
+// comparação contra o mês anterior. Linhas de professores ("professor" na
+// OBS -> tipo_lancamento PROFESSORES) ficam separadas.
+const DIAS_UTEIS = [1, 2, 3, 4, 5];
+const NOME_DIA = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+const NOME_DIA_CURTO = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+let _entregasEsc = [];
+let _calMes = null;      // 'AAAA-MM' mostrado no calendário
+let _calDiaSel = null;   // 'AAAA-MM-DD' clicado
+
+const dowDe = (dataIso) => { const [a, m, d] = dataIso.split('-').map(Number); return new Date(a, m - 1, d).getDay(); };
+const fmtN = (v) => (Number.isInteger(v) ? String(v) : v.toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
+
+// Por dia da semana: média de alunos (e professores) por dia de entrega.
+function resumoSemana(linhas) {
+  const porDia = new Map(); // data -> {alunos, prof}
+  for (const l of linhas) {
+    if (!porDia.has(l.data)) porDia.set(l.data, { alunos: 0, prof: 0 });
+    const d = porDia.get(l.data);
+    if (l.professores) d.prof += l.marmitas; else d.alunos += l.marmitas;
+  }
+  const out = {};
+  for (const dow of DIAS_UTEIS) {
+    const dias = [...porDia.entries()].filter(([data, v]) => dowDe(data) === dow && (v.alunos || v.prof));
+    const n = dias.length;
+    out[dow] = {
+      dias: n,
+      alunos: n ? Math.round((dias.reduce((s, [, v]) => s + v.alunos, 0) / n) * 10) / 10 : null,
+      prof: n ? Math.round((dias.reduce((s, [, v]) => s + v.prof, 0) / n) * 10) / 10 : null,
+    };
+  }
+  out.total = DIAS_UTEIS.reduce((s, d) => s + (out[d].alunos ?? 0), 0);
+  return out;
+}
+
+async function renderEscolaSemanaECalendario() {
+  const alvoSem = document.getElementById('alunosSemana');
+  const alvoCal = document.getElementById('calendarioEsc');
+  try {
+    _entregasEsc = await buscarEntregasEscola();
+  } catch (e) {
+    console.error(e);
+    if (alvoSem) alvoSem.innerHTML = `<div class="cc"><p class="rk-vazio">Não consegui carregar as entregas da escola.</p></div>`;
+    if (alvoCal) alvoCal.innerHTML = '';
+    return;
+  }
+  if (!document.getElementById('alunosSemana')) return; // página re-renderizou no meio
+  renderAlunosSemana();
+  const mesesComEntrega = [...new Set(_entregasEsc.map((l) => l.mes))].sort();
+  _calMes = _mesSelecionado || new Date().toLocaleDateString('sv-SE').slice(0, 7);
+  if (!_mesSelecionado && !mesesComEntrega.length) _calMes = new Date().toLocaleDateString('sv-SE').slice(0, 7);
+  _calDiaSel = null;
+  renderCalendario();
+}
+
+function renderAlunosSemana() {
+  const alvo = document.getElementById('alunosSemana');
+  const meses = [...new Set(_entregasEsc.map((l) => l.mes))].sort();
+  if (!meses.length) { alvo.innerHTML = `<div class="cc"><p class="rk-vazio">Sem entregas da escola.</p></div>`; return; }
+  // Mês analisado: o do filtro Período (ou o mais recente em "Todos os períodos").
+  const mes = _mesSelecionado && meses.includes(_mesSelecionado) ? _mesSelecionado : (_mesSelecionado ? null : meses[meses.length - 1]);
+  if (!mes) { alvo.innerHTML = `<div class="cc"><p class="rk-vazio">Sem entregas da escola em ${nomeMesAno(_mesSelecionado)}.</p></div>`; return; }
+  const doArquivo = _arquivo && _entregasEsc.some((l) => l.arquivo === _arquivo);
+  const atual = resumoSemana(_entregasEsc.filter((l) => (doArquivo ? l.arquivo === _arquivo : l.mes === mes)));
+  const mesAnt = mesAnterior(mes);
+  const temAnt = meses.includes(mesAnt);
+  const ant = temAnt ? resumoSemana(_entregasEsc.filter((l) => l.mes === mesAnt)) : null;
+
+  const variacao = (a, b) => {
+    if (a == null || b == null) return '';
+    const d = Math.round((a - b) * 10) / 10;
+    if (d === 0) return `<div class="al-var al-igual">= igual a ${nomeMesCurto(mesAnt)}</div>`;
+    return `<div class="al-var ${d > 0 ? 'al-up' : 'al-down'}">${d > 0 ? '▲' : '▼'} ${fmtN(Math.abs(d))} vs. ${nomeMesCurto(mesAnt)} (${fmtN(b)})</div>`;
+  };
+
+  const cards = DIAS_UTEIS.map((dow) => {
+    const a = atual[dow], b = ant ? ant[dow] : null;
+    return `<div class="kpi al-card" style="--acc:var(--petroleo)">
+      <div class="k-lbl">${NOME_DIA[dow]}</div>
+      <div class="k-val">${a.alunos == null ? '—' : fmtN(a.alunos)} <span class="al-un">alunos</span></div>
+      ${variacao(a.alunos, b ? b.alunos : null)}
+      <div class="k-sub">${a.dias} dia${a.dias === 1 ? '' : 's'} de entrega${a.prof ? ` · +${fmtN(a.prof)} prof.` : ''}</div>
+    </div>`;
+  }).join('');
+  const total = `<div class="kpi al-card" style="--acc:var(--cafe)">
+      <div class="k-lbl">Total na semana</div>
+      <div class="k-val">${fmtN(Math.round(atual.total * 10) / 10)} <span class="al-un">almoços</span></div>
+      ${variacao(Math.round(atual.total * 10) / 10, ant ? Math.round(ant.total * 10) / 10 : null)}
+      <div class="k-sub">soma de seg a sex (média por dia)</div>
+    </div>`;
+
+  // Evolução: total de almoços/semana em cada mês do mesmo ano.
+  const ano = mes.slice(0, 4);
+  const serie = meses.filter((m) => m.startsWith(ano)).map((m) => ({ m, t: resumoSemana(_entregasEsc.filter((l) => l.mes === m)).total }));
+
+  alvo.innerHTML = `
+    <p class="al-nota">${doArquivo ? `Arquivo <b>${_arquivo}</b>` : `<b>${nomeMesAno(mes)}</b>`} — média de quentinhas de alunos por dia de entrega, que é o nº de alunos almoçando (mesmo número da aba "DiasAlmoco").${temAnt ? '' : ' Sem mês anterior pra comparar.'}</p>
+    <div class="kg al-grid">${cards}${total}</div>
+    <div class="cc" style="margin-top:14px"><h3>Almoços por semana — evolução ${ano}</h3><div class="ch"><canvas id="chAlunos"></canvas></div></div>`;
+
+  mkC('chAlunos', {
+    type: 'bar',
+    data: { labels: serie.map((x) => nomeMesCurto(x.m)), datasets: [{ data: serie.map((x) => Math.round(x.t * 10) / 10), backgroundColor: serie.map((x) => (x.m === mes ? '#2C6E7F' : '#9DC0C9')), borderRadius: 6 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => nomeMesAno(serie[c[0].dataIndex].m), label: (c) => ` ${fmtN(c.raw)} almoços/semana` } } },
+      scales: { y: { beginAtZero: true, ticks: { font: { size: 10 } }, grid: { color: '#EFE6D8' } }, x: { ticks: { font: { size: 10 } }, grid: { display: false } } },
+    },
+  });
+}
+
+function renderCalendario() {
+  const alvo = document.getElementById('calendarioEsc');
+  if (!alvo) return;
+  const [ano, mes] = _calMes.split('-').map(Number);
+  const hojeIso = new Date().toLocaleDateString('sv-SE');
+
+  // entregas do mês do calendário (pela DATA, qualquer arquivo)
+  const porDia = new Map();
+  for (const l of _entregasEsc) {
+    if (!l.data.startsWith(_calMes)) continue;
+    if (!porDia.has(l.data)) porDia.set(l.data, { alunos: 0, prof: 0, lanches: 0, valor: 0, arquivos: new Set() });
+    const d = porDia.get(l.data);
+    if (l.professores) d.prof += l.marmitas; else d.alunos += l.marmitas;
+    d.lanches += l.lanches; d.valor += l.valor; d.arquivos.add(l.arquivo);
+  }
+
+  const primeiro = new Date(ano, mes - 1, 1);
+  const diasNoMes = new Date(ano, mes, 0).getDate();
+  const celulas = [];
+  for (let i = 0; i < primeiro.getDay(); i++) celulas.push('<div class="cal-cel cal-vazio"></div>');
+  let feriadosUteis = 0, diasEntrega = 0;
+  for (let dia = 1; dia <= diasNoMes; dia++) {
+    const data = `${_calMes}-${String(dia).padStart(2, '0')}`;
+    const dow = new Date(ano, mes - 1, dia).getDay();
+    const fer = feriadoEm(data);
+    const ent = porDia.get(data);
+    const fds = dow === 0 || dow === 6;
+    if (fer && !fds) feriadosUteis++;
+    if (ent) diasEntrega++;
+    const cls = ['cal-cel'];
+    if (fds) cls.push('cal-fds');
+    if (fer) cls.push('cal-feriado');
+    if (ent) cls.push('cal-entrega');
+    if (fer && ent) cls.push('cal-conflito');
+    if (data === hojeIso) cls.push('cal-hoje');
+    if (data > hojeIso && ent) cls.push('cal-previsto');
+    if (data === _calDiaSel) cls.push('cal-sel');
+    const conteudo = fer
+      ? `<span class="cal-tag cal-tag-fer" title="${fer.nome}">${fer.nome}</span>${ent ? '<span class="cal-tag cal-tag-alerta">⚠ entrega lançada</span>' : (fds ? '' : '<span class="cal-sem">sem entrega</span>')}`
+      : ent ? `<span class="cal-qtd">🍱 ${ent.alunos + ent.prof}</span>` : '';
+    celulas.push(`<button type="button" class="${cls.join(' ')}" data-dia="${data}"><span class="cal-num">${dia}</span>${conteudo}</button>`);
+  }
+
+  const proximos = proximosFeriadosUteis(60);
+  const avisos = proximos.length ? `<div class="cal-avisos">${proximos.map((f) => `
+      <div class="cal-aviso${f.emDias <= 7 ? ' cal-aviso-perto' : ''}">📅 <b>${fmtData(f.data).slice(0, 5)} (${NOME_DIA[f.dow].toLowerCase()})</b> — ${f.nome}: <b>não teremos entrega</b>${f.emDias === 0 ? ' · hoje' : f.emDias === 1 ? ' · amanhã' : ` · em ${f.emDias} dias`}</div>`).join('')}</div>` : '';
+
+  alvo.innerHTML = `
+    ${avisos}
+    <div class="cc cal-card">
+      <div class="cal-hd">
+        <button type="button" class="cal-nav" data-nav="-1" aria-label="Mês anterior">◀</button>
+        <div class="cal-titulo">${nomeMesAno(_calMes)}<span>${diasEntrega} dia${diasEntrega === 1 ? '' : 's'} com entrega · ${feriadosUteis} feriado${feriadosUteis === 1 ? '' : 's'} em dia útil</span></div>
+        <button type="button" class="cal-nav" data-nav="1" aria-label="Próximo mês">▶</button>
+      </div>
+      <div class="cal-grid">
+        ${NOME_DIA_CURTO.map((d) => `<div class="cal-dow">${d}</div>`).join('')}
+        ${celulas.join('')}
+      </div>
+      <div class="cal-legenda">
+        <span><i class="lg lg-ent"></i>com entrega (nº de quentinhas)</span>
+        <span><i class="lg lg-prev"></i>prevista (lançada pra frente)</span>
+        <span><i class="lg lg-fer"></i>feriado — sem entrega</span>
+        <span><i class="lg lg-hoje"></i>hoje</span>
+      </div>
+      <div id="calDetalhe" class="cal-detalhe">${detalheDia(_calDiaSel, porDia)}</div>
+    </div>`;
+
+  alvo.querySelectorAll('[data-nav]').forEach((b) => b.addEventListener('click', () => {
+    const d = new Date(ano, mes - 1 + Number(b.dataset.nav), 1);
+    _calMes = iso(d).slice(0, 7);
+    _calDiaSel = null;
+    renderCalendario();
+  }));
+  alvo.querySelectorAll('[data-dia]').forEach((b) => b.addEventListener('click', () => {
+    _calDiaSel = _calDiaSel === b.dataset.dia ? null : b.dataset.dia;
+    renderCalendario();
+  }));
+}
+
+function detalheDia(data, porDia) {
+  if (!data) return '<span class="cal-dica">Toque num dia pra ver o detalhe.</span>';
+  const dow = dowDe(data);
+  const fer = feriadoEm(data);
+  const ent = porDia.get(data);
+  const hojeIso = new Date().toLocaleDateString('sv-SE');
+  const titulo = `<b>${NOME_DIA[dow]}, ${fmtData(data)}</b>`;
+  const partes = [titulo];
+  if (fer) partes.push(`<div class="cal-det-fer">🎌 ${fer.nome} <small>(${fer.tipo})</small> — ${ent ? '<b>atenção: tem entrega lançada nesse feriado, confira a planilha</b>' : 'não teremos entrega'}</div>`);
+  if (ent) {
+    partes.push(`<div>${data > hojeIso ? '🗓️ Entrega prevista' : '🍱 Entrega'}: <b>${ent.alunos} aluno${ent.alunos === 1 ? '' : 's'}</b>${ent.prof ? ` + ${ent.prof} professor${ent.prof === 1 ? '' : 'es'}` : ''}${ent.lanches ? ` · ${ent.lanches} lanche${ent.lanches === 1 ? '' : 's'}` : ''} · ${fmt(ent.valor)}</div>`);
+    partes.push(`<div class="cal-det-arq">${[...ent.arquivos].join(', ')}</div>`);
+  } else if (!fer) {
+    partes.push(`<div>${dow === 0 || dow === 6 ? 'Fim de semana.' : 'Nenhuma entrega lançada nesse dia.'}</div>`);
+  }
+  return partes.join('');
 }
 
 // Colunas replicadas 1:1 do relatório "Detalhamento | Entregas" que a
