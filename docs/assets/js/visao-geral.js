@@ -379,43 +379,77 @@ async function renderIndicadoresGastos() {
   });
 }
 
-// ─── Alunos por dia da semana + calendário (Lote 52, 2026-10-12) ───────────
-// Pedido do David: a quantidade de quentinhas de ALUNOS por dia = nº de
-// alunos almoçando na escola naquele dia (a aba DiasAlmoco da planilha tem
-// esse mesmo número por dia da semana). Aqui sai direto das entregas do
-// mês do arquivo (critério de sempre: período pelo NOME do arquivo), com
-// comparação contra o mês anterior. Linhas de professores ("professor" na
-// OBS -> tipo_lancamento PROFESSORES) ficam separadas.
+// ─── Alunos por dia da semana + calendário (Lote 52/53) ─────────────────────
+// Pedido do David: a quantidade de quentinhas de ALUNOS num dia = nº de
+// alunos almoçando na escola naquele dia. Sai direto das entregas (período
+// pelo NOME do arquivo, critério de sempre). Linhas de professores
+// ("professor" na OBS -> tipo_lancamento PROFESSORES) ficam à parte.
+//
+// Lote 53 (2026-10-12): trocada a MÉDIA do mês pelo número INTEIRO atual —
+// a média escondia o que interessa ("14,8 alunos" não existe; o que
+// aconteceu foi "a segunda caiu de 15 pra 14 em 05/10"). Agora cada dia da
+// semana mostra a quantidade da última entrega lançada até hoje naquele
+// dia, comparada com a última do mês anterior, e embaixo um registro
+// automático das mudanças (data, de → para, OBS da linha). A aba
+// DiasAlmoco da planilha deixou de ser referência.
 const DIAS_UTEIS = [1, 2, 3, 4, 5];
 const NOME_DIA = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 const NOME_DIA_CURTO = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+const OBS_PADRAO_PROF = /marmita para os professores/i;
 let _entregasEsc = [];
 let _calMes = null;      // 'AAAA-MM' mostrado no calendário
 let _calDiaSel = null;   // 'AAAA-MM-DD' clicado
 
 const dowDe = (dataIso) => { const [a, m, d] = dataIso.split('-').map(Number); return new Date(a, m - 1, d).getDay(); };
 const fmtN = (v) => (Number.isInteger(v) ? String(v) : v.toLocaleString('pt-BR', { maximumFractionDigits: 1 }));
+const hojeIsoLocal = () => new Date().toLocaleDateString('sv-SE');
 
-// Por dia da semana: média de alunos (e professores) por dia de entrega.
-function resumoSemana(linhas) {
-  const porDia = new Map(); // data -> {alunos, prof}
+// Soma por DATA: alunos, professores e OBS (sem a OBS padrão dos professores).
+function porData(linhas) {
+  const m = new Map();
   for (const l of linhas) {
-    if (!porDia.has(l.data)) porDia.set(l.data, { alunos: 0, prof: 0 });
-    const d = porDia.get(l.data);
+    if (!m.has(l.data)) m.set(l.data, { data: l.data, alunos: 0, prof: 0, obs: new Set() });
+    const d = m.get(l.data);
     if (l.professores) d.prof += l.marmitas; else d.alunos += l.marmitas;
+    if (l.obs && !OBS_PADRAO_PROF.test(l.obs)) d.obs.add(l.obs);
   }
+  return [...m.values()].filter((d) => d.alunos || d.prof).sort((a, b) => a.data.localeCompare(b.data));
+}
+
+// Quantidade ATUAL por dia da semana: a última entrega lançada até hoje
+// (se o arquivo só tiver datas futuras — entregas já lançadas pra frente —
+// usa a primeira delas).
+function resumoSemana(linhas) {
+  const dias = porData(linhas);
+  const hoje = hojeIsoLocal();
   const out = {};
   for (const dow of DIAS_UTEIS) {
-    const dias = [...porDia.entries()].filter(([data, v]) => dowDe(data) === dow && (v.alunos || v.prof));
-    const n = dias.length;
-    out[dow] = {
-      dias: n,
-      alunos: n ? Math.round((dias.reduce((s, [, v]) => s + v.alunos, 0) / n) * 10) / 10 : null,
-      prof: n ? Math.round((dias.reduce((s, [, v]) => s + v.prof, 0) / n) * 10) / 10 : null,
-    };
+    const doDia = dias.filter((d) => dowDe(d.data) === dow);
+    const passados = doDia.filter((d) => d.data <= hoje);
+    const ref = passados.length ? passados[passados.length - 1] : doDia[0];
+    out[dow] = { dias: doDia.length, alunos: ref ? ref.alunos : null, prof: ref ? ref.prof : null, data: ref ? ref.data : null };
   }
   out.total = DIAS_UTEIS.reduce((s, d) => s + (out[d].alunos ?? 0), 0);
   return out;
+}
+
+// Registro de mudanças: cada entrega do período cuja quantidade de alunos é
+// diferente da entrega anterior do MESMO dia da semana (a anterior pode ser
+// de outro arquivo — pega a virada de um mês pro outro também).
+function mudancasNoPeriodo(linhasPeriodo) {
+  const todas = porData(_entregasEsc);
+  const datasPeriodo = new Set(linhasPeriodo.map((l) => l.data));
+  const out = [];
+  for (const dow of DIAS_UTEIS) {
+    const seq = todas.filter((d) => dowDe(d.data) === dow && d.alunos > 0);
+    for (let i = 1; i < seq.length; i++) {
+      const a = seq[i - 1], b = seq[i];
+      if (datasPeriodo.has(b.data) && a.alunos !== b.alunos) {
+        out.push({ data: b.data, dow, de: a.alunos, para: b.alunos, anterior: a.data, obs: [...b.obs].join(' · ') });
+      }
+    }
+  }
+  return out.sort((x, y) => x.data.localeCompare(y.data));
 }
 
 async function renderEscolaSemanaECalendario() {
@@ -446,50 +480,65 @@ function renderAlunosSemana() {
   const mes = _mesSelecionado && meses.includes(_mesSelecionado) ? _mesSelecionado : (_mesSelecionado ? null : meses[meses.length - 1]);
   if (!mes) { alvo.innerHTML = `<div class="cc"><p class="rk-vazio">Sem entregas da escola em ${nomeMesAno(_mesSelecionado)}.</p></div>`; return; }
   const doArquivo = _arquivo && _entregasEsc.some((l) => l.arquivo === _arquivo);
-  const atual = resumoSemana(_entregasEsc.filter((l) => (doArquivo ? l.arquivo === _arquivo : l.mes === mes)));
+  const linhasPeriodo = _entregasEsc.filter((l) => (doArquivo ? l.arquivo === _arquivo : l.mes === mes));
+  const atual = resumoSemana(linhasPeriodo);
   const mesAnt = mesAnterior(mes);
   const temAnt = meses.includes(mesAnt);
   const ant = temAnt ? resumoSemana(_entregasEsc.filter((l) => l.mes === mesAnt)) : null;
 
   const variacao = (a, b) => {
     if (a == null || b == null) return '';
-    const d = Math.round((a - b) * 10) / 10;
-    if (d === 0) return `<div class="al-var al-igual">= igual a ${nomeMesCurto(mesAnt)}</div>`;
-    return `<div class="al-var ${d > 0 ? 'al-up' : 'al-down'}">${d > 0 ? '▲' : '▼'} ${fmtN(Math.abs(d))} vs. ${nomeMesCurto(mesAnt)} (${fmtN(b)})</div>`;
+    const d = a - b;
+    if (d === 0) return `<div class="al-var al-igual">= igual a ${nomeMesCurto(mesAnt)} (${b})</div>`;
+    return `<div class="al-var ${d > 0 ? 'al-up' : 'al-down'}">${d > 0 ? '▲' : '▼'} ${Math.abs(d)} vs. ${nomeMesCurto(mesAnt)} (${b})</div>`;
   };
 
   const cards = DIAS_UTEIS.map((dow) => {
     const a = atual[dow], b = ant ? ant[dow] : null;
+    const desde = a.data ? `em ${fmtData(a.data).slice(0, 5)}` : 'sem entrega';
     return `<div class="kpi al-card" style="--acc:var(--petroleo)">
       <div class="k-lbl">${NOME_DIA[dow]}</div>
-      <div class="k-val">${a.alunos == null ? '—' : fmtN(a.alunos)} <span class="al-un">alunos</span></div>
+      <div class="k-val">${a.alunos == null ? '—' : a.alunos} <span class="al-un">alunos</span></div>
       ${variacao(a.alunos, b ? b.alunos : null)}
-      <div class="k-sub">${a.dias} dia${a.dias === 1 ? '' : 's'} de entrega${a.prof ? ` · +${fmtN(a.prof)} prof.` : ''}</div>
+      <div class="k-sub">${desde}${a.prof ? ` · +${a.prof} prof.` : ''}</div>
     </div>`;
   }).join('');
   const total = `<div class="kpi al-card" style="--acc:var(--cafe)">
       <div class="k-lbl">Total na semana</div>
-      <div class="k-val">${fmtN(Math.round(atual.total * 10) / 10)} <span class="al-un">almoços</span></div>
-      ${variacao(Math.round(atual.total * 10) / 10, ant ? Math.round(ant.total * 10) / 10 : null)}
-      <div class="k-sub">soma de seg a sex (média por dia)</div>
+      <div class="k-val">${atual.total} <span class="al-un">almoços</span></div>
+      ${variacao(atual.total, ant ? ant.total : null)}
+      <div class="k-sub">soma de seg a sex</div>
     </div>`;
 
-  // Evolução: total de almoços/semana em cada mês do mesmo ano.
+  const mud = mudancasNoPeriodo(linhasPeriodo);
+  const registro = `
+    <div class="cc al-mud">
+      <h3>Mudanças no período <span class="h3-sub">(alunos por dia, comparado com o mesmo dia da semana anterior)</span></h3>
+      ${mud.length ? `<ul>${mud.map((m) => `
+        <li class="${m.para > m.de ? 'al-up' : 'al-down'}">
+          <b>${fmtData(m.data).slice(0, 5)} (${NOME_DIA_CURTO[m.dow].toLowerCase()})</b>
+          <span>${m.de} → ${m.para} alunos ${m.para > m.de ? '▲' : '▼'} ${Math.abs(m.para - m.de)}</span>
+          ${m.obs ? `<em>OBS: ${m.obs}</em>` : ''}
+        </li>`).join('')}</ul>` : '<p class="rk-vazio">Nenhuma mudança de quantidade no período — mesmos alunos em todas as semanas.</p>'}
+    </div>`;
+
+  // Evolução: total de almoços/semana (quantidade atual) em cada mês do ano.
   const ano = mes.slice(0, 4);
   const serie = meses.filter((m) => m.startsWith(ano)).map((m) => ({ m, t: resumoSemana(_entregasEsc.filter((l) => l.mes === m)).total }));
 
   alvo.innerHTML = `
-    <p class="al-nota">${doArquivo ? `Arquivo <b>${_arquivo}</b>` : `<b>${nomeMesAno(mes)}</b>`} — média de quentinhas de alunos por dia de entrega, que é o nº de alunos almoçando (mesmo número da aba "DiasAlmoco").${temAnt ? '' : ' Sem mês anterior pra comparar.'}</p>
+    <p class="al-nota">${doArquivo ? `Arquivo <b>${_arquivo}</b>` : `<b>${nomeMesAno(mes)}</b>`} — quantos alunos almoçam em cada dia da semana (última entrega lançada até hoje), comparado com o fim do mês anterior.${temAnt ? '' : ' Sem mês anterior pra comparar.'}</p>
     <div class="kg al-grid">${cards}${total}</div>
+    ${registro}
     <div class="cc" style="margin-top:14px"><h3>Almoços por semana — evolução ${ano}</h3><div class="ch"><canvas id="chAlunos"></canvas></div></div>`;
 
   mkC('chAlunos', {
     type: 'bar',
-    data: { labels: serie.map((x) => nomeMesCurto(x.m)), datasets: [{ data: serie.map((x) => Math.round(x.t * 10) / 10), backgroundColor: serie.map((x) => (x.m === mes ? '#2C6E7F' : '#9DC0C9')), borderRadius: 6 }] },
+    data: { labels: serie.map((x) => nomeMesCurto(x.m)), datasets: [{ data: serie.map((x) => x.t), backgroundColor: serie.map((x) => (x.m === mes ? '#2C6E7F' : '#9DC0C9')), borderRadius: 6 }] },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => nomeMesAno(serie[c[0].dataIndex].m), label: (c) => ` ${fmtN(c.raw)} almoços/semana` } } },
-      scales: { y: { beginAtZero: true, ticks: { font: { size: 10 } }, grid: { color: '#EFE6D8' } }, x: { ticks: { font: { size: 10 } }, grid: { display: false } } },
+      plugins: { legend: { display: false }, tooltip: { callbacks: { title: (c) => nomeMesAno(serie[c[0].dataIndex].m), label: (c) => ` ${c.raw} almoços/semana` } } },
+      scales: { y: { beginAtZero: true, ticks: { precision: 0, font: { size: 10 } }, grid: { color: '#EFE6D8' } }, x: { ticks: { font: { size: 10 } }, grid: { display: false } } },
     },
   });
 }

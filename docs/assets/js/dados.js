@@ -281,7 +281,7 @@ export function buscarEntregasEscola() {
   if (!_entregasEscolaCache) {
     _entregasEscolaCache = buscarTodasPaginado((inicio, fim) =>
       sb.from('pedidos_escola')
-        .select('data, qtd_marmitas, qtd_lanches, tipo_lancamento, valor_total, arquivo_origem', { count: 'exact' })
+        .select('data, qtd_marmitas, qtd_lanches, tipo_lancamento, valor_total, obs, arquivo_origem', { count: 'exact' })
         .order('id', { ascending: true }).range(inicio, fim))
       .then((linhas) => linhas
         .filter((l) => l.data && mesDoArquivo(l.arquivo_origem))
@@ -293,6 +293,7 @@ export function buscarEntregasEscola() {
           marmitas: num(l.qtd_marmitas),
           lanches: num(l.qtd_lanches),
           valor: num(l.valor_total),
+          obs: (l.obs ?? '').trim() || null,
         })))
       .catch((e) => { _entregasEscolaCache = null; throw e; });
   }

@@ -373,3 +373,11 @@ tr.row-pend td { background: #FFF8F6; }
   .cal-tag, .cal-sem { font-size: 8px; }
   .cal-qtd { font-size: 10px; }
 }
+/* Registro de mudanças de alunos (Lote 53) */
+.al-mud { margin-top: 14px; }
+.al-mud ul { list-style: none; display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+.al-mud li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; font-size: 12px; padding: 6px 10px; border-radius: 8px; background: var(--surf); }
+.al-mud li b { color: var(--t1); min-width: 92px; }
+.al-mud li.al-up span { color: var(--sucesso); font-weight: 700; }
+.al-mud li.al-down span { color: var(--alerta); font-weight: 700; }
+.al-mud li em { color: var(--t2); font-size: 11px; }
